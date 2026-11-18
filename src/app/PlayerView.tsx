@@ -1,77 +1,100 @@
 "use client";
 
 import { useActionState, useEffect, useState, useTransition, type ReactNode } from "react";
+import { AnimatePresence, MotionConfig, motion, type Variants } from "framer-motion";
 import { setNickname, submitAnswer, type ActionResult } from "./actions";
 import type { PlayState } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
+import { INK, field, greenBtn, orangeBtn } from "./theme";
 
-// Paleta fija (no cambia con el modo oscuro del sistema).
-const INK = "text-[#5a2210]";
-const orangeBtn = "bg-[#ee8b43] text-white";
-const greenBtn = "bg-[#2e9e6e] text-white";
-const primaryBtn = `w-full rounded-2xl bg-[#5a2210] px-5 py-4 text-lg font-bold text-white transition active:scale-[.98] disabled:opacity-40`;
-const field = `w-full rounded-2xl border-2 border-[#f3c9a3] bg-white px-4 py-3 text-lg ${INK} outline-none focus:border-[#ee8b43]`;
+const primaryBtn = `w-full rounded-2xl bg-[#5a2210] px-5 py-4 text-lg font-bold text-white transition-opacity disabled:opacity-40`;
+
+const spring = { type: "spring", stiffness: 380, damping: 30, mass: 0.8 } as const;
+
+// Pantalla: entra con fundido + desplazamiento y escalona a sus hijos; sale rápido.
+const screenVariants: Variants = {
+  hidden: { opacity: 0, y: 24, filter: "blur(6px)" },
+  show: {
+    opacity: 1,
+    y: 0,
+    filter: "blur(0px)",
+    transition: { duration: 0.45, ease: [0.22, 1, 0.36, 1], when: "beforeChildren", staggerChildren: 0.07 },
+  },
+  exit: { opacity: 0, y: -16, filter: "blur(4px)", transition: { duration: 0.22, ease: "easeIn" } },
+};
+
+const itemVariants: Variants = {
+  hidden: { opacity: 0, y: 18, scale: 0.97 },
+  show: { opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 300, damping: 26 } },
+};
 
 export function PlayerView() {
   const { data, failed, refresh } = usePolling<PlayState>("/api/play/state");
 
+  let key = "loading";
+  let title: string | undefined;
+  let progress: { current: number; total: number } | undefined;
+  let content: ReactNode;
+
   if (!data) {
-    return (
-      <Shell>
-        <Message>{failed ? "No se pudo cargar. Reintentando…" : "Cargando…"}</Message>
-      </Shell>
-    );
-  }
-
-  if (data.status === "none") {
-    return (
-      <Shell>
-        <Message title="Quest">Esperando a que el moderador cree una sesión…</Message>
-      </Shell>
-    );
-  }
-
-  if (!data.me) {
+    content = <Message>{failed ? "No se pudo cargar. Reintentando…" : "Cargando…"}</Message>;
+  } else if (data.status === "none") {
+    key = "none";
+    content = <Message title="Quest">Esperando a que el moderador cree una sesión…</Message>;
+  } else if (!data.me) {
+    title = data.title;
     if (data.status === "finished") {
-      return (
-        <Shell title={data.title}>
-          <Message>Esta sesión ya terminó.</Message>
-        </Shell>
-      );
+      key = "ended";
+      content = <Message>Esta sesión ya terminó.</Message>;
+    } else {
+      key = "nickname";
+      content = <NicknameForm onDone={refresh} />;
     }
-    return (
-      <Shell title={data.title}>
-        <NicknameForm onDone={refresh} />
-      </Shell>
-    );
-  }
-
-  const progress = data.status === "live" && data.total > 0 ? { current: data.index + 1, total: data.total } : undefined;
-
-  return (
-    <Shell title={data.title} progress={progress}>
-      {(data.status === "draft" || data.status === "ready") && (
-        <Message title={`Hola, ${data.me}`}>Esperando a que el moderador inicie la sesión…</Message>
-      )}
-
-      {data.status === "finished" && (
+  } else {
+    title = data.title;
+    if (data.status === "live" && data.total > 0) progress = { current: data.index + 1, total: data.total };
+    if (data.status === "draft" || data.status === "ready") {
+      key = "waiting";
+      content = <Message title={`Hola, ${data.me}`}>Esperando a que el moderador inicie la sesión…</Message>;
+    } else if (data.status === "finished") {
+      key = "finished";
+      content = (
         <Message title="¡Gracias por participar!" done>
           La sesión ha terminado.
         </Message>
-      )}
+      );
+    } else if (data.status === "live" && data.question) {
+      if (data.answered) {
+        key = `answered-${data.question.id}`;
+        content = (
+          <Message title="¡Respuesta enviada!" done>
+            Esperando la siguiente pregunta…
+          </Message>
+        );
+      } else {
+        key = `question-${data.question.id}`;
+        content = <AnswerForm question={data.question} onDone={refresh} />;
+      }
+    }
+  }
 
-      {data.status === "live" && data.question && (
-        <>
-          {data.answered ? (
-            <Message title="¡Respuesta enviada!" done>
-              Esperando la siguiente pregunta…
-            </Message>
-          ) : (
-            <AnswerForm key={data.question.id} question={data.question} onDone={refresh} />
-          )}
-        </>
-      )}
-    </Shell>
+  return (
+    <MotionConfig reducedMotion="user">
+      <Shell title={title} progress={progress}>
+        <AnimatePresence mode="wait" initial>
+          <motion.div
+            key={key}
+            variants={screenVariants}
+            initial="hidden"
+            animate="show"
+            exit="exit"
+            className="flex flex-1 flex-col"
+          >
+            {content}
+          </motion.div>
+        </AnimatePresence>
+      </Shell>
+    </MotionConfig>
   );
 }
 
@@ -89,25 +112,66 @@ function Shell({
     <div className="flex min-h-dvh flex-1 items-center justify-center bg-[#f7e4cf] sm:p-6">
       <div className="relative flex min-h-dvh w-full max-w-[420px] flex-col overflow-hidden bg-[#fdf5ea] sm:min-h-0 sm:h-[800px] sm:max-h-[calc(100dvh-3rem)] sm:rounded-[2.5rem] sm:border-[10px] sm:border-white sm:shadow-xl">
         {/* formas decorativas */}
-        <div aria-hidden className="pointer-events-none absolute -right-24 top-24 h-72 w-72 rounded-full bg-[#faead7]" />
-        <div aria-hidden className="pointer-events-none absolute -left-28 bottom-10 h-80 w-80 rounded-full bg-[#faead7]" />
+        <motion.div
+          aria-hidden
+          animate={{ x: [0, -18, 0], y: [0, 22, 0], scale: [1, 1.06, 1] }}
+          transition={{ duration: 11, repeat: Infinity, ease: "easeInOut" }}
+          className="pointer-events-none absolute -right-24 top-24 h-72 w-72 rounded-full bg-[#faead7]"
+        />
+        <motion.div
+          aria-hidden
+          animate={{ x: [0, 20, 0], y: [0, -24, 0], scale: [1, 1.08, 1] }}
+          transition={{ duration: 13, repeat: Infinity, ease: "easeInOut" }}
+          className="pointer-events-none absolute -left-28 bottom-10 h-80 w-80 rounded-full bg-[#faead7]"
+        />
 
         <header className="relative z-10 flex flex-col gap-3 px-6 pb-2 pt-8">
-          <h1 className={`truncate text-center text-xl font-extrabold ${INK}`}>{title ?? "Quest"}</h1>
-          {progress && (
-            <div className="flex flex-col gap-1">
-              <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#f6dcc0]">
-                <div
-                  className="h-full rounded-full bg-[#2e9e6e] transition-all duration-500"
-                  style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                />
-              </div>
-              <p className="text-sm font-bold">
-                <span className="text-[#2e9e6e]">{progress.current}</span>
-                <span className="text-[#c9a487]">/{progress.total}</span>
-              </p>
-            </div>
-          )}
+          <motion.h1
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
+            className={`truncate text-center text-xl font-extrabold ${INK}`}
+          >
+            {title ?? "Quest"}
+          </motion.h1>
+          <AnimatePresence initial={false}>
+            {progress && (
+              <motion.div
+                key="progress"
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                exit={{ opacity: 0, height: 0 }}
+                transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+                className="flex flex-col gap-1 overflow-hidden"
+              >
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#f6dcc0]">
+                  <motion.div
+                    className="h-full origin-left rounded-full bg-[#2e9e6e]"
+                    initial={false}
+                    animate={{ width: `${(progress.current / progress.total) * 100}%` }}
+                    transition={{ type: "spring", stiffness: 120, damping: 20 }}
+                  />
+                </div>
+                <p className="flex text-sm font-bold">
+                  <span className="relative inline-block overflow-hidden text-[#2e9e6e]">
+                    <AnimatePresence mode="popLayout" initial={false}>
+                      <motion.span
+                        key={progress.current}
+                        className="inline-block"
+                        initial={{ y: "100%", opacity: 0 }}
+                        animate={{ y: 0, opacity: 1 }}
+                        exit={{ y: "-100%", opacity: 0 }}
+                        transition={spring}
+                      >
+                        {progress.current}
+                      </motion.span>
+                    </AnimatePresence>
+                  </span>
+                  <span className="text-[#c9a487]">/{progress.total}</span>
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </header>
 
         <main className="relative z-10 flex flex-1 flex-col overflow-y-auto px-6 pb-8 pt-4">{children}</main>
@@ -120,12 +184,41 @@ function Message({ title, done, children }: { title?: string; done?: boolean; ch
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
       {done && (
-        <span className="flex h-16 w-16 items-center justify-center rounded-full bg-[#2e9e6e] text-white">
-          <CheckIcon className="h-8 w-8" />
-        </span>
+        <div className="relative flex h-16 w-16 items-center justify-center">
+          <motion.span
+            aria-hidden
+            initial={{ scale: 0.8, opacity: 0.5 }}
+            animate={{ scale: 2.2, opacity: 0 }}
+            transition={{ delay: 0.25, duration: 1.1, ease: "easeOut" }}
+            className="absolute inset-0 rounded-full bg-[#2e9e6e]"
+          />
+          <motion.span
+            initial={{ scale: 0, rotate: -30 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 14, delay: 0.1 }}
+            className="relative flex h-16 w-16 items-center justify-center rounded-full bg-[#2e9e6e] text-white shadow-lg shadow-[#2e9e6e]/30"
+          >
+            <CheckIcon className="h-8 w-8" delay={0.35} />
+          </motion.span>
+        </div>
       )}
-      {title && <h2 className={`text-2xl font-extrabold ${INK}`}>{title}</h2>}
-      <p className="text-lg text-[#8a5a3c]">{children}</p>
+      {title && (
+        <motion.h2 variants={itemVariants} className={`text-2xl font-extrabold ${INK}`}>
+          {title}
+        </motion.h2>
+      )}
+      {!done && !title && (
+        <motion.span
+          aria-hidden
+          variants={itemVariants}
+          animate={{ opacity: [0.4, 1, 0.4] }}
+          transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+          className="h-2 w-12 rounded-full bg-[#ee8b43]"
+        />
+      )}
+      <motion.p variants={itemVariants} className="text-lg text-[#8a5a3c]">
+        {children}
+      </motion.p>
     </div>
   );
 }
@@ -139,15 +232,35 @@ function NicknameForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form action={action} className="flex flex-1 flex-col justify-center gap-4">
-      <h2 className={`text-3xl font-extrabold leading-tight ${INK}`}>¿Cómo quieres que te llamemos?</h2>
-      <label htmlFor="nickname" className="text-[#8a5a3c]">
+      <motion.h2 variants={itemVariants} className={`text-3xl font-extrabold leading-tight ${INK}`}>
+        ¿Cómo quieres que te llamemos?
+      </motion.h2>
+      <motion.label variants={itemVariants} htmlFor="nickname" className="text-[#8a5a3c]">
         Elige un nickname para comenzar
-      </label>
-      <input id="nickname" name="nickname" required minLength={2} maxLength={20} autoFocus autoComplete="off" className={field} />
-      <button disabled={pending} className={primaryBtn}>
+      </motion.label>
+      <motion.input
+        variants={itemVariants}
+        whileFocus={{ scale: 1.02 }}
+        transition={spring}
+        id="nickname"
+        name="nickname"
+        required
+        minLength={2}
+        maxLength={20}
+        autoFocus
+        autoComplete="off"
+        className={`${field} transition-colors`}
+      />
+      <motion.button
+        variants={itemVariants}
+        whileHover={{ scale: 1.02 }}
+        whileTap={{ scale: 0.97 }}
+        disabled={pending}
+        className={primaryBtn}
+      >
         {pending ? "Entrando…" : "Comenzar"}
-      </button>
-      {state.error && <p className="text-sm font-semibold text-red-700">{state.error}</p>}
+      </motion.button>
+      <ErrorText message={state.error} />
     </form>
   );
 }
@@ -197,28 +310,32 @@ function AnswerForm({
 
   return (
     <form onSubmit={submit} className="flex flex-1 flex-col gap-5">
-      <h2 className={`whitespace-pre-wrap text-2xl font-extrabold leading-snug ${INK}`}>{question.text}</h2>
+      <motion.h2 variants={itemVariants} className={`whitespace-pre-wrap text-2xl font-extrabold leading-snug ${INK}`}>
+        {question.text}
+      </motion.h2>
 
       {type === "text" && (
-        <textarea
+        <motion.textarea
+          variants={itemVariants}
           value={text}
           onChange={(e) => setText(e.target.value)}
           maxLength={1000}
           rows={6}
           placeholder="Escribe tu respuesta"
-          className={`${field} resize-none`}
+          className={`${field} resize-none transition-colors`}
         />
       )}
 
       {type === "number" && (
-        <input
+        <motion.input
+          variants={itemVariants}
           type="number"
           inputMode="decimal"
           step="any"
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Escribe un número"
-          className={field}
+          className={`${field} transition-colors`}
         />
       )}
 
@@ -227,17 +344,20 @@ function AnswerForm({
           {question.options.map((opt, i) => {
             const selected = picks.includes(i);
             return (
-              <button
+              <motion.button
                 key={i}
+                variants={itemVariants}
+                whileHover={{ scale: 1.06 }}
+                whileTap={{ scale: 0.92 }}
                 type="button"
                 aria-pressed={selected}
                 onClick={() => toggle(i)}
-                className={`flex aspect-square items-center justify-center rounded-2xl text-2xl font-extrabold shadow-sm transition active:scale-95 ${
+                className={`flex aspect-square items-center justify-center rounded-2xl text-2xl font-extrabold shadow-sm transition-colors duration-300 ${
                   selected ? greenBtn : orangeBtn
                 }`}
               >
                 {opt}
-              </button>
+              </motion.button>
             );
           })}
         </div>
@@ -245,73 +365,144 @@ function AnswerForm({
 
       {type === "ranking" && (
         <div className="flex flex-col gap-3">
-          <p className="text-sm font-semibold text-[#8a5a3c]">Ordena de la primera a la última con las flechas</p>
+          <motion.p variants={itemVariants} className="text-sm font-semibold text-[#8a5a3c]">
+            Ordena de la primera a la última con las flechas
+          </motion.p>
           {order.map((optionIndex, pos) => (
-            <div key={optionIndex} className={`flex items-center gap-3 rounded-2xl px-4 py-3 shadow-sm ${orangeBtn}`}>
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/25 font-extrabold">
-                {pos + 1}
+            <motion.div
+              key={optionIndex}
+              layout
+              variants={itemVariants}
+              transition={{ layout: spring }}
+              className={`flex items-center gap-3 rounded-2xl px-4 py-3 shadow-sm ${orangeBtn}`}
+            >
+              <span className="relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/25 font-extrabold">
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <motion.span
+                    key={pos}
+                    initial={{ y: 14, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    exit={{ y: -14, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="inline-block"
+                  >
+                    {pos + 1}
+                  </motion.span>
+                </AnimatePresence>
               </span>
               <span className="flex-1 whitespace-pre-wrap text-lg font-bold">{question.options[optionIndex]}</span>
-              <button
+              <motion.button
+                whileTap={{ scale: 0.85 }}
                 type="button"
                 aria-label="Subir"
                 disabled={pos === 0}
                 onClick={() => moveItem(pos, -1)}
-                className="rounded-lg bg-white/25 p-2 disabled:opacity-30"
+                className="rounded-lg bg-white/25 p-2 transition-opacity disabled:opacity-30"
               >
                 <ChevronIcon className="h-4 w-4 -rotate-90" />
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.85 }}
                 type="button"
                 aria-label="Bajar"
                 disabled={pos === order.length - 1}
                 onClick={() => moveItem(pos, 1)}
-                className="rounded-lg bg-white/25 p-2 disabled:opacity-30"
+                className="rounded-lg bg-white/25 p-2 transition-opacity disabled:opacity-30"
               >
                 <ChevronIcon className="h-4 w-4 rotate-90" />
-              </button>
-            </div>
+              </motion.button>
+            </motion.div>
           ))}
         </div>
       )}
 
       {(type === "single" || type === "multiple") && (
         <div className="flex flex-col gap-3">
-          {type === "multiple" && <p className="text-sm font-semibold text-[#8a5a3c]">Puedes elegir varias opciones</p>}
+          {type === "multiple" && (
+            <motion.p variants={itemVariants} className="text-sm font-semibold text-[#8a5a3c]">
+              Puedes elegir varias opciones
+            </motion.p>
+          )}
           {question.options.map((opt, i) => {
             const selected = picks.includes(i);
             return (
-              <button
+              <motion.button
                 key={i}
+                variants={itemVariants}
+                whileHover={{ scale: 1.02, x: 2 }}
+                whileTap={{ scale: 0.97 }}
                 type="button"
                 aria-pressed={selected}
                 onClick={() => toggle(i)}
-                className={`flex w-full items-center justify-between gap-3 rounded-2xl px-5 py-4 text-left text-lg font-bold shadow-sm transition active:scale-[.98] ${
+                className={`flex w-full items-center justify-between gap-3 rounded-2xl px-5 py-4 text-left text-lg font-bold shadow-sm transition-colors duration-300 ${
                   selected ? greenBtn : orangeBtn
                 }`}
               >
                 <span className="whitespace-pre-wrap">{opt}</span>
-                {selected ? <CheckIcon className="h-6 w-6 shrink-0" /> : <ChevronIcon className="h-5 w-5 shrink-0" />}
-              </button>
+                <AnimatePresence mode="wait" initial={false}>
+                  <motion.span
+                    key={selected ? "on" : "off"}
+                    initial={{ scale: 0.3, rotate: -60, opacity: 0 }}
+                    animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                    exit={{ scale: 0.3, rotate: 60, opacity: 0 }}
+                    transition={{ type: "spring", stiffness: 500, damping: 26 }}
+                    className="flex shrink-0"
+                  >
+                    {selected ? <CheckIcon className="h-6 w-6" /> : <ChevronIcon className="h-5 w-5" />}
+                  </motion.span>
+                </AnimatePresence>
+              </motion.button>
             );
           })}
         </div>
       )}
 
-      <div className="mt-auto flex flex-col gap-3 pt-2">
-        {error && <p className="text-sm font-semibold text-red-700">{error}</p>}
-        <button disabled={pending || !ready} className={primaryBtn}>
+      <motion.div variants={itemVariants} className="mt-auto flex flex-col gap-3 pt-2">
+        <ErrorText message={error} />
+        <motion.button
+          whileHover={ready && !pending ? { scale: 1.02 } : undefined}
+          whileTap={ready && !pending ? { scale: 0.97 } : undefined}
+          animate={{ y: ready ? 0 : 2 }}
+          transition={spring}
+          disabled={pending || !ready}
+          className={primaryBtn}
+        >
           {pending ? "Enviando…" : "Enviar respuesta"}
-        </button>
-      </div>
+        </motion.button>
+      </motion.div>
     </form>
   );
 }
 
-function CheckIcon({ className }: { className?: string }) {
+function ErrorText({ message }: { message?: string }) {
+  return (
+    <AnimatePresence initial={false}>
+      {message && (
+        <motion.p
+          key={message}
+          role="alert"
+          initial={{ opacity: 0, height: 0, x: 0 }}
+          animate={{ opacity: 1, height: "auto", x: [0, -8, 8, -5, 5, 0] }}
+          exit={{ opacity: 0, height: 0 }}
+          transition={{ duration: 0.4 }}
+          className="text-sm font-semibold text-red-700"
+        >
+          {message}
+        </motion.p>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function CheckIcon({ className, delay = 0 }: { className?: string; delay?: number }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M5 12.5l4.5 4.5L19 7.5" />
+      <motion.path
+        d="M5 12.5l4.5 4.5L19 7.5"
+        initial={{ pathLength: 0 }}
+        animate={{ pathLength: 1 }}
+        transition={{ duration: 0.4, ease: "easeOut", delay }}
+      />
     </svg>
   );
 }

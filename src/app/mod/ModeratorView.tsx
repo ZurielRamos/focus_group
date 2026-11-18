@@ -1,14 +1,24 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, type ReactNode } from "react";
 import { newSession, nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
 import type { ModState, Question, QuestionResult, QuestionType } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
 
-const wrap = "mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10";
-const btn = "rounded bg-black px-4 py-2 text-white disabled:opacity-50 dark:bg-white dark:text-black";
-const btn2 = "rounded border border-zinc-300 px-3 py-1.5 text-sm disabled:opacity-40 dark:border-zinc-700";
-const input = "rounded border border-zinc-300 px-3 py-2 dark:border-zinc-700 dark:bg-zinc-900";
+const card = "rounded-2xl border-2 border-[#f3c9a3] bg-white/70 p-5";
+const btn = "rounded-2xl bg-[#5a2210] px-6 py-3 font-bold text-white transition active:scale-[.98] disabled:opacity-40";
+const btn2 = "rounded-xl border-2 border-[#f3c9a3] bg-white px-3 py-1.5 text-sm font-bold text-[#5a2210] transition active:scale-95 disabled:opacity-40";
+const input = "rounded-xl border-2 border-[#f3c9a3] bg-white px-3 py-2 text-[#5a2210] outline-none focus:border-[#ee8b43]";
+
+function Page({ children }: { children: ReactNode }) {
+  return (
+    <div className="relative flex min-h-dvh flex-1 flex-col overflow-hidden bg-[#fdf5ea] text-[#5a2210]">
+      <div aria-hidden className="pointer-events-none absolute -right-32 top-20 h-96 w-96 rounded-full bg-[#faead7]" />
+      <div aria-hidden className="pointer-events-none absolute -left-40 bottom-0 h-[28rem] w-[28rem] rounded-full bg-[#faead7]" />
+      <main className="relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">{children}</main>
+    </div>
+  );
+}
 
 const WARN_ANSWERS = "Se borrarán todas las respuestas y la sesión volverá al inicio. ¿Continuar?";
 
@@ -19,9 +29,9 @@ export function ModeratorView() {
 
   if (!data) {
     return (
-      <main className={wrap}>
-        {failed ? <p className="text-sm text-red-600">No se pudo cargar el estado. Reintentando…</p> : <p className="text-zinc-500">Cargando…</p>}
-      </main>
+      <Page>
+        {failed ? <p className="text-sm font-semibold text-red-700">No se pudo cargar el estado. Reintentando…</p> : <p className="text-[#8a5a3c]">Cargando…</p>}
+      </Page>
     );
   }
 
@@ -40,9 +50,9 @@ export function ModeratorView() {
   }
 
   return (
-    <main className={wrap}>
-      <header className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <h1 className="text-2xl font-semibold">{data.title}</h1>
+    <Page>
+      <header className={`flex flex-col gap-2 ${card}`}>
+        <h1 className="text-3xl font-extrabold">{data.title}</h1>
         <CopyField label="Enlace para encuestados" url={joinUrl} hint="Compártelo con los participantes." />
         <CopyField
           label="Enlace de moderador"
@@ -55,7 +65,7 @@ export function ModeratorView() {
         </p>
       </header>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm font-semibold text-red-700">{error}</p>}
 
       {data.status !== "draft" && (
         <div className="flex flex-wrap gap-2">
@@ -96,7 +106,7 @@ export function ModeratorView() {
 
       {data.status === "ready" && (
         <section className="flex flex-col gap-4">
-          <p className="text-sm text-zinc-500">
+          <p className="text-sm text-[#8a5a3c]">
             La sesión está lista con {data.questions.length} pregunta{data.questions.length === 1 ? "" : "s"}. Los encuestados esperan el inicio.
           </p>
           <ol className="flex list-decimal flex-col gap-1 pl-5">
@@ -127,9 +137,18 @@ export function ModeratorView() {
 
       {data.status === "live" && (
         <section className="flex flex-col gap-4">
-          <p className="text-sm text-zinc-500">
-            Pregunta {data.index + 1} de {data.questions.length}
-          </p>
+          <div className="flex flex-col gap-1">
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-[#f6dcc0]">
+              <div
+                className="h-full rounded-full bg-[#2e9e6e] transition-all duration-500"
+                style={{ width: `${((data.index + 1) / data.questions.length) * 100}%` }}
+              />
+            </div>
+            <p className="text-sm font-bold">
+              <span className="text-[#2e9e6e]">{data.index + 1}</span>
+              <span className="text-[#c9a487]">/{data.questions.length}</span>
+            </p>
+          </div>
           <QuestionBlock
             q={data.questions[data.index]}
             result={data.results[data.index]}
@@ -147,13 +166,13 @@ export function ModeratorView() {
 
       {data.status === "finished" && (
         <section className="flex flex-col gap-6">
-          <h2 className="text-xl font-medium">Sesión finalizada · Resultados</h2>
+          <h2 className="text-2xl font-extrabold">Sesión finalizada · Resultados</h2>
           {data.questions.map((q, i) => (
             <QuestionBlock key={q.id} q={q} result={data.results[i]} participants={data.participants.length} />
           ))}
         </section>
       )}
-    </main>
+    </Page>
   );
 }
 
@@ -172,14 +191,14 @@ function CopyField({ label, url, hint }: { label: string; url: string; hint: str
 
   return (
     <div className="flex flex-col gap-1">
-      <span className="text-sm font-medium">{label}</span>
+      <span className="text-sm font-bold">{label}</span>
       <div className="flex gap-2">
         <input readOnly value={url} onFocus={(e) => e.currentTarget.select()} className={`${input} flex-1 text-sm`} />
         <button type="button" onClick={copy} className={btn2}>
           {copied ? "¡Copiado!" : "Copiar"}
         </button>
       </div>
-      <span className="text-xs text-zinc-500">{hint}</span>
+      <span className="text-xs text-[#8a5a3c]">{hint}</span>
     </div>
   );
 }
@@ -189,9 +208,9 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
   const fmt = (n: number | null) => (n === null ? "–" : Number.isInteger(n) ? String(n) : n.toFixed(2));
 
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <h3 className="whitespace-pre-wrap text-lg font-medium">{q.text}</h3>
-      <p className="text-sm text-zinc-500">
+    <div className={`flex flex-col gap-3 ${card}`}>
+      <h3 className="whitespace-pre-wrap text-xl font-extrabold leading-snug">{q.text}</h3>
+      <p className="text-sm text-[#8a5a3c]">
         {TYPE_LABEL[q.type]} · Respondieron {result.answered} de {participants}
       </p>
 
@@ -204,11 +223,11 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
             </p>
           )}
           {result.texts.length === 0 ? (
-            <p className="text-sm text-zinc-500">Sin respuestas todavía.</p>
+            <p className="text-sm text-[#8a5a3c]">Sin respuestas todavía.</p>
           ) : (
             <ul className="flex flex-col gap-2">
               {result.texts.map((t, i) => (
-                <li key={i} className="whitespace-pre-wrap rounded bg-zinc-100 p-2 text-sm dark:bg-zinc-900">
+                <li key={i} className="whitespace-pre-wrap rounded-xl bg-[#faead7] p-3 text-sm">
                   <strong>{t.nickname}:</strong> {t.text}
                 </li>
               ))}
@@ -219,17 +238,17 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
 
       {q.type === "ranking" && (
         <>
-          <p className="text-xs text-zinc-500">Ordenado por posición promedio (1 = la más importante).</p>
+          <p className="text-xs text-[#8a5a3c]">Ordenado por posición promedio (1 = la más importante).</p>
           <ol className="flex flex-col gap-2">
             {q.options
               .map((opt, i) => ({ opt, rank: result.ranks[i] }))
               .sort((x, y) => (result.answered ? x.rank - y.rank : 0))
               .map(({ opt, rank }, k) => (
-                <li key={opt + k} className="flex justify-between rounded bg-zinc-100 p-2 text-sm dark:bg-zinc-900">
+                <li key={opt + k} className="flex justify-between rounded-xl bg-[#faead7] p-3 text-sm">
                   <span>
                     <strong>{k + 1}.</strong> {opt}
                   </span>
-                  <span className="text-zinc-500">{result.answered ? `pos. ${rank.toFixed(2)}` : "–"}</span>
+                  <span className="text-[#8a5a3c]">{result.answered ? `pos. ${rank.toFixed(2)}` : "–"}</span>
                 </li>
               ))}
           </ol>
@@ -250,8 +269,8 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
                   <span>{opt}</span>
                   <span>{result.counts[i]}</span>
                 </div>
-                <div className="h-2 rounded bg-zinc-200 dark:bg-zinc-800">
-                  <div className="h-2 rounded bg-blue-600" style={{ width: `${(result.counts[i] / max) * 100}%` }} />
+                <div className="h-2.5 rounded-full bg-[#f6dcc0]">
+                  <div className="h-2.5 rounded-full bg-[#2e9e6e] transition-all duration-500" style={{ width: `${(result.counts[i] / max) * 100}%` }} />
                 </div>
               </li>
             ))}
@@ -335,15 +354,15 @@ function Editor({
 
   return (
     <section className="flex flex-col gap-4">
-      <label className="flex flex-col gap-1 text-sm text-zinc-500">
+      <label className="flex flex-col gap-1 text-sm text-[#8a5a3c]">
         Título
-        <input value={title} onChange={(e) => { setSaved(false); setTitle(e.target.value); }} maxLength={100} className={`${input} text-base text-inherit`} />
+        <input value={title} onChange={(e) => { setSaved(false); setTitle(e.target.value); }} maxLength={100} className={`${input} text-base`} />
       </label>
 
       {questions.map((q, i) => (
-        <div key={i} className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+        <div key={i} className={`flex flex-col gap-3 ${card}`}>
           <div className="flex flex-wrap items-center gap-2">
-            <span className="font-medium">#{i + 1}</span>
+            <span className="font-extrabold">#{i + 1}</span>
             <select value={q.type} onChange={(e) => changeType(i, e.target.value as QuestionType)} className={`${input} py-1`}>
               {Object.entries(TYPE_LABEL).map(([v, l]) => (
                 <option key={v} value={v}>{l}</option>
@@ -389,12 +408,12 @@ function Editor({
                   ))}
                 </select>
               </label>
-              <span className="text-zinc-500">Los encuestados eligen un número: {q.options.join(", ")}</span>
+              <span className="text-[#8a5a3c]">Los encuestados eligen un número: {q.options.join(", ")}</span>
             </div>
           )}
 
           {q.type === "ranking" && (
-            <p className="text-xs text-zinc-500">Los encuestados ordenarán estas opciones de la primera a la última.</p>
+            <p className="text-xs text-[#8a5a3c]">Los encuestados ordenarán estas opciones de la primera a la última.</p>
           )}
 
           {(q.type === "single" || q.type === "multiple" || q.type === "ranking") && (
@@ -438,7 +457,7 @@ function Editor({
         <button type="button" className={btn2} disabled={saving || busy} onClick={onSave}>
           {saving ? "Guardando…" : "Guardar"}
         </button>
-        {saved && <span className="text-sm text-green-600">Guardado</span>}
+        {saved && <span className="text-sm font-bold text-[#2e9e6e]">Guardado</span>}
         <span className="flex-1" />
         <button type="button" className={btn} disabled={saving || busy} onClick={() => onStart(save)}>
           Iniciar sesión

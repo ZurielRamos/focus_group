@@ -50,6 +50,14 @@ export function ensureSchema() {
       );
       `,
     )
+    .then(async () => {
+      // Migración: columna de configuración (imágenes, filas de matriz, comparación).
+      try {
+        await db.execute("ALTER TABLE questions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'");
+      } catch (e) {
+        if (!/duplicate column/i.test(String(e))) throw e;
+      }
+    })
     .catch((e) => {
       ready = undefined;
       throw e;

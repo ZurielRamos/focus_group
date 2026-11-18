@@ -3,7 +3,8 @@ import { db, ensureSchema } from "./db";
 
 // single/multiple: selección · text: texto libre · rating: escala numérica (las opciones son los números)
 // ranking: ordenar opciones · number: respuesta numérica
-export type QuestionType = "single" | "multiple" | "text" | "rating" | "ranking" | "number";
+// matrix: varias filas (aspectos), en cada una se elige una opción (columna)
+export type QuestionType = "single" | "multiple" | "text" | "rating" | "ranking" | "number" | "matrix";
 // draft: editando · ready: preguntas listas, esperando iniciar · live: en curso · finished: terminada
 export type Status = "draft" | "ready" | "live" | "finished";
 
@@ -13,6 +14,9 @@ export type Question = {
   text: string;
   type: QuestionType;
   options: string[];
+  images: string[]; // una URL por opción ("" si no tiene); misma longitud que options
+  rows: string[]; // solo matrix: los aspectos a calificar
+  compareTo: number | null; // posición de una pregunta anterior con la que se compara el resultado
 };
 
 export type SessionRow = {
@@ -33,6 +37,7 @@ export type QuestionResult = {
   min: number | null; // solo número
   max: number | null; // solo número
   ranks: number[]; // posición promedio por opción (ranking); 1 = primera
+  matrix: number[][]; // matrix: votos por fila y por opción
 };
 
 export type ModState = {
@@ -51,7 +56,14 @@ export type PlayState = {
   index: number;
   total: number;
   me: string | null;
-  question: { id: number; text: string; type: QuestionType; options: string[] } | null;
+  question: {
+    id: number;
+    text: string;
+    type: QuestionType;
+    options: string[];
+    images: string[];
+    rows: string[];
+  } | null;
   answered: boolean;
 };
 
@@ -113,16 +125,27 @@ export const emptyPlayState: PlayState = {
 
 export async function getQuestions(sessionId: number): Promise<Question[]> {
   const res = await db.execute({
-    sql: "SELECT id, position, text, type, options FROM questions WHERE session_id = ? ORDER BY position",
+    sql: "SELECT id, position, text, type, options, config FROM questions WHERE session_id = ? ORDER BY position",
     args: [sessionId],
   });
-  return res.rows.map((r) => ({
-    id: Number(r.id),
-    position: Number(r.position),
-    text: String(r.text),
-    type: String(r.type) as QuestionType,
-    options: JSON.parse(String(r.options)) as string[],
-  }));
+  return res.rows.map((r) => {
+    const options = JSON.parse(String(r.options)) as string[];
+    const config = JSON.parse(String(r.config ?? "{}")) as Partial<{
+      images: string[];
+      rows: string[];
+      compareTo: number | null;
+    }>;
+    return {
+      id: Number(r.id),
+      position: Number(r.position),
+      text: String(r.text),
+      type: String(r.type) as QuestionType,
+      options,
+      images: options.map((_, i) => config.images?.[i] ?? ""),
+      rows: config.rows ?? [],
+      compareTo: typeof config.compareTo === "number" ? config.compareTo : null,
+    };
+  });
 }
 
 export async function getParticipantByToken(sessionId: number, token: string) {
@@ -154,6 +177,7 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
     const rankSums = q.options.map(() => 0);
     const texts: QuestionResult["texts"] = [];
     const numbers: number[] = [];
+    const matrix = q.rows.map(() => q.options.map(() => 0));
 
     for (const a of mine) {
       const value = JSON.parse(String(a.value));
@@ -162,6 +186,10 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
       } else if (q.type === "number") {
         numbers.push(Number(value));
         texts.push({ nickname: String(a.nickname), text: String(value) });
+      } else if (q.type === "matrix") {
+        (value as number[]).forEach((optionIndex, row) => {
+          if (matrix[row]?.[optionIndex] !== undefined) matrix[row][optionIndex]++;
+        });
       } else if (q.type === "ranking") {
         (value as number[]).forEach((optionIndex, position) => {
           if (rankSums[optionIndex] !== undefined) rankSums[optionIndex] += position + 1;
@@ -188,6 +216,7 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
       min: numbers.length ? Math.min(...numbers) : null,
       max: numbers.length ? Math.max(...numbers) : null,
       ranks: rankSums.map((sum) => (mine.length ? sum / mine.length : 0)),
+      matrix,
     };
   });
 
@@ -223,8 +252,67 @@ export async function buildPlayState(s: SessionRow, participantToken: string | u
     total: questions.length,
     me: me?.nickname ?? null,
     question: current
-      ? { id: current.id, text: current.text, type: current.type, options: current.options }
+      ? {
+          id: current.id,
+          text: current.text,
+          type: current.type,
+          options: current.options,
+          images: current.images,
+          rows: current.rows,
+        }
       : null,
     answered,
   };
+}
+
+// ---------- Exportación ----------
+
+const csvCell = (v: unknown) => {
+  let t = String(v ?? "");
+  // Evita que Excel ejecute como fórmula un texto escrito por un participante.
+  if (typeof v === "string" && /^[=+\-@\t\r]/.test(t)) t = `'${t}`;
+  return /[",\n\r]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
+};
+
+const TYPE_NAME: Record<QuestionType, string> = {
+  single: "Selección simple",
+  multiple: "Selección múltiple",
+  rating: "Escala",
+  ranking: "Ranking",
+  number: "Número",
+  text: "Texto libre",
+  matrix: "Matriz",
+};
+
+// CSV en formato largo: una fila por participante, pregunta (y aspecto en matrices).
+export async function buildCsv(s: SessionRow): Promise<string> {
+  const questions = await getQuestions(s.id);
+  const ans = await db.execute({
+    sql: `SELECT a.question_id, a.value, p.nickname
+          FROM answers a
+          JOIN participants p ON p.id = a.participant_id
+          JOIN questions q ON q.id = a.question_id
+          WHERE q.session_id = ?
+          ORDER BY q.position, p.id`,
+    args: [s.id],
+  });
+
+  const lines: unknown[][] = [["Pregunta #", "Enunciado", "Tipo", "Participante", "Aspecto", "Respuesta"]];
+  for (const [qi, q] of questions.entries()) {
+    for (const a of ans.rows.filter((r) => Number(r.question_id) === q.id)) {
+      const value = JSON.parse(String(a.value));
+      const base = [qi + 1, q.text, TYPE_NAME[q.type], String(a.nickname)];
+      if (q.type === "matrix") {
+        (value as number[]).forEach((o, row) => lines.push([...base, q.rows[row] ?? "", q.options[o] ?? ""]));
+      } else if (q.type === "ranking") {
+        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" > ")]);
+      } else if (q.type === "text" || q.type === "number") {
+        lines.push([...base, "", value]);
+      } else {
+        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" | ")]);
+      }
+    }
+  }
+  // BOM para que Excel lea bien los acentos.
+  return "\ufeff" + lines.map((l) => l.map(csvCell).join(",")).join("\r\n");
 }

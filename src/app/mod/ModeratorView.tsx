@@ -4,6 +4,7 @@ import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { newSession, nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
 import type { ModState, Question, QuestionResult, QuestionType } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
+import { GUIDE_QUESTIONS, GUIDE_TITLE, type Draft } from "@/lib/guide";
 
 const card = "rounded-2xl border-2 border-[#f3c9a3] bg-white/70 p-5";
 const btn = "rounded-2xl bg-[#5a2210] px-6 py-3 font-bold text-white transition active:scale-[.98] disabled:opacity-40";
@@ -18,6 +19,12 @@ function Page({ children }: { children: ReactNode }) {
       <main className="relative z-10 mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">{children}</main>
     </div>
   );
+}
+
+// Pregunta y resultado con los que se compara la pregunta i (si están enlazadas).
+function beforeOf(data: ModState, i: number) {
+  const c = data.questions[i]?.compareTo;
+  return c === null || c === undefined || !data.questions[c] ? undefined : { q: data.questions[c], result: data.results[c] };
 }
 
 const WARN_ANSWERS = "Se borrarán todas las respuestas y la sesión volverá al inicio. ¿Continuar?";
@@ -72,6 +79,9 @@ export function ModeratorView() {
 
       {data.status !== "draft" && (
         <div className="flex flex-wrap gap-2">
+          <a href="/api/mod/export" download className={`${btn2} inline-block`}>
+            Descargar CSV
+          </a>
           <button
             disabled={pending}
             className={btn2}
@@ -155,6 +165,7 @@ export function ModeratorView() {
             q={data.questions[data.index]}
             result={data.results[data.index]}
             participants={data.participants.length}
+            before={beforeOf(data, data.index)}
           />
           <button
             disabled={pending}
@@ -168,9 +179,20 @@ export function ModeratorView() {
 
       {data.status === "finished" && (
         <section className="flex flex-col gap-6">
-          <h2 className="text-2xl font-extrabold">Sesión finalizada · Resultados</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-2xl font-extrabold">Sesión finalizada · Resultados</h2>
+            <a href="/api/mod/export" download className={`${btn2} inline-block`}>
+              Descargar CSV (Excel)
+            </a>
+          </div>
           {data.questions.map((q, i) => (
-            <QuestionBlock key={q.id} q={q} result={data.results[i]} participants={data.participants.length} />
+            <QuestionBlock
+              key={q.id}
+              q={q}
+              result={data.results[i]}
+              participants={data.participants.length}
+              before={beforeOf(data, i)}
+            />
           ))}
         </section>
       )}
@@ -262,7 +284,35 @@ function CopyField({ label, url, hint }: { label: string; url: string; hint: str
   );
 }
 
-function QuestionBlock({ q, result, participants }: { q: Question; result: QuestionResult; participants: number }) {
+type Before = { q: Question; result: QuestionResult };
+
+function Thumb({ src }: { src: string }) {
+  if (!src) return null;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" className="h-12 w-12 shrink-0 rounded-lg bg-white object-contain" />;
+}
+
+function Delta({ now, prev }: { now: number; prev: number }) {
+  const d = now - prev;
+  return (
+    <span className={`text-xs font-bold ${d > 0 ? "text-[#2e9e6e]" : d < 0 ? "text-red-700" : "text-[#8a5a3c]"}`}>
+      antes {prev} ({d > 0 ? "+" : ""}
+      {d})
+    </span>
+  );
+}
+
+function QuestionBlock({
+  q,
+  result,
+  participants,
+  before,
+}: {
+  q: Question;
+  result: QuestionResult;
+  participants: number;
+  before?: Before;
+}) {
   const max = Math.max(1, ...result.counts);
   const fmt = (n: number | null) => (n === null ? "–" : Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -272,6 +322,11 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
       <p className="text-sm text-[#8a5a3c]">
         {TYPE_LABEL[q.type]} · Respondieron {result.answered} de {participants}
       </p>
+      {before && (
+        <p className="text-xs font-semibold text-[#8a5a3c]">
+          Comparada con la pregunta {q.compareTo! + 1} ({before.result.answered} respuestas).
+        </p>
+      )}
 
       {(q.type === "text" || q.type === "number") && (
         <>
@@ -295,19 +350,69 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
         </>
       )}
 
+      {q.type === "matrix" && (
+        <div className="overflow-x-auto">
+          <table className="w-full border-separate border-spacing-y-1 text-sm">
+            <thead>
+              <tr>
+                <th />
+                {q.options.map((o, c) => (
+                  <th key={c} className="px-2 pb-1 text-center align-bottom font-bold">
+                    <div className="flex flex-col items-center gap-1">
+                      <Thumb src={q.images[c]} />
+                      {o}
+                    </div>
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {q.rows.map((row, r) => {
+                const best = Math.max(...result.matrix[r]);
+                return (
+                  <tr key={r}>
+                    <td className="max-w-[16rem] rounded-l-xl bg-[#faead7] p-2 font-semibold">{row}</td>
+                    {q.options.map((_, c) => {
+                      const n = result.matrix[r][c];
+                      const win = best > 0 && n === best;
+                      const prev = before?.result.matrix[r]?.[c];
+                      return (
+                        <td
+                          key={c}
+                          className={`bg-[#faead7] p-2 text-center last:rounded-r-xl ${win ? "font-extrabold text-[#2e9e6e]" : ""}`}
+                        >
+                          <div className="text-lg leading-none">{n}</div>
+                          {prev !== undefined && <Delta now={n} prev={prev} />}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {q.type === "ranking" && (
         <>
           <p className="text-xs text-[#8a5a3c]">Ordenado por posición promedio (1 = la más importante).</p>
           <ol className="flex flex-col gap-2">
             {q.options
-              .map((opt, i) => ({ opt, rank: result.ranks[i] }))
+              .map((opt, i) => ({ opt, rank: result.ranks[i], i }))
               .sort((x, y) => (result.answered ? x.rank - y.rank : 0))
-              .map(({ opt, rank }, k) => (
-                <li key={opt + k} className="flex justify-between rounded-xl bg-[#faead7] p-3 text-sm">
-                  <span>
-                    <strong>{k + 1}.</strong> {opt}
+              .map(({ opt, rank, i }, k) => (
+                <li key={opt + k} className="flex items-center justify-between gap-3 rounded-xl bg-[#faead7] p-3 text-sm">
+                  <span className="flex items-center gap-3">
+                    <Thumb src={q.images[i]} />
+                    <span>
+                      <strong>{k + 1}.</strong> {opt}
+                    </span>
                   </span>
-                  <span className="text-[#8a5a3c]">{result.answered ? `pos. ${rank.toFixed(2)}` : "–"}</span>
+                  <span className="text-[#8a5a3c]">
+                    {result.answered ? `pos. ${rank.toFixed(2)}` : "–"}
+                    {before?.result.answered ? ` (antes ${before.result.ranks[i].toFixed(2)})` : ""}
+                  </span>
                 </li>
               ))}
           </ol>
@@ -319,17 +424,24 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
           {q.type === "rating" && result.answered > 0 && (
             <p className="text-sm">
               Promedio: <strong>{fmt(result.average)}</strong>
+              {before?.result.average != null && <> (antes {fmt(before.result.average)})</>}
             </p>
           )}
           <ul className="flex flex-col gap-2">
             {q.options.map((opt, i) => (
-              <li key={i} className="flex flex-col gap-1">
-                <div className="flex justify-between text-sm">
-                  <span>{opt}</span>
-                  <span>{result.counts[i]}</span>
-                </div>
-                <div className="h-2.5 rounded-full bg-[#f6dcc0]">
-                  <div className="h-2.5 rounded-full bg-[#2e9e6e] transition-all duration-500" style={{ width: `${(result.counts[i] / max) * 100}%` }} />
+              <li key={i} className="flex items-center gap-3">
+                <Thumb src={q.images[i]} />
+                <div className="flex flex-1 flex-col gap-1">
+                  <div className="flex justify-between gap-2 text-sm">
+                    <span>{opt}</span>
+                    <span className="flex items-center gap-2">
+                      {before && <Delta now={result.counts[i]} prev={before.result.counts[i]} />}
+                      {result.counts[i]}
+                    </span>
+                  </div>
+                  <div className="h-2.5 rounded-full bg-[#f6dcc0]">
+                    <div className="h-2.5 rounded-full bg-[#2e9e6e] transition-all duration-500" style={{ width: `${(result.counts[i] / max) * 100}%` }} />
+                  </div>
                 </div>
               </li>
             ))}
@@ -340,8 +452,6 @@ function QuestionBlock({ q, result, participants }: { q: Question; result: Quest
   );
 }
 
-type Draft = { text: string; type: QuestionType; options: string[] };
-
 const TYPE_LABEL: Record<QuestionType, string> = {
   single: "Selección simple",
   multiple: "Selección múltiple",
@@ -349,9 +459,12 @@ const TYPE_LABEL: Record<QuestionType, string> = {
   ranking: "Ranking (ordenar opciones)",
   number: "Número",
   text: "Texto libre",
+  matrix: "Matriz (aspectos × opciones)",
 };
 
 const scale = (min: number, max: number) => Array.from({ length: max - min + 1 }, (_, k) => String(min + k));
+
+const blankQuestion = (): Draft => ({ text: "", type: "single", options: ["", ""], images: ["", ""], rows: [], compareTo: null });
 
 function Editor({
   initialTitle,
@@ -369,8 +482,8 @@ function Editor({
   const [title, setTitle] = useState(initialTitle);
   const [questions, setQuestions] = useState<Draft[]>(
     initial.length
-      ? initial.map(({ text, type, options }) => ({ text, type, options }))
-      : [{ text: "", type: "single", options: ["", ""] }],
+      ? initial.map(({ text, type, options, images, rows, compareTo }) => ({ text, type, options, images, rows, compareTo }))
+      : [blankQuestion()],
   );
   const [saved, setSaved] = useState(false);
   const [saving, startSaving] = useTransition();
@@ -381,24 +494,58 @@ function Editor({
   };
   const setOption = (qi: number, oi: number, v: string) =>
     update(qi, { options: questions[qi].options.map((o, k) => (k === oi ? v : o)) });
-  const move = (i: number, d: -1 | 1) => {
+  const setImage = (qi: number, oi: number, v: string) =>
+    update(qi, { images: questions[qi].images.map((o, k) => (k === oi ? v : o)) });
+  const setRow = (qi: number, ri: number, v: string) =>
+    update(qi, { rows: questions[qi].rows.map((o, k) => (k === ri ? v : o)) });
+
+  // order[k] = índice anterior de la pregunta que queda en la posición k; mantiene las comparaciones.
+  const reorder = (order: number[]) => {
     setSaved(false);
     setQuestions((qs) => {
-      const j = i + d;
-      if (j < 0 || j >= qs.length) return qs;
-      const copy = [...qs];
-      [copy[i], copy[j]] = [copy[j], copy[i]];
-      return copy;
+      const where = new Map(order.map((old, k) => [old, k]));
+      return order.map((old, k) => {
+        const q = qs[old];
+        const c = q.compareTo === null ? null : (where.get(q.compareTo) ?? null);
+        return { ...q, compareTo: c !== null && c < k ? c : null };
+      });
     });
   };
+  const move = (i: number, d: -1 | 1) => {
+    const j = i + d;
+    if (j < 0 || j >= questions.length) return;
+    const order = questions.map((_, k) => k);
+    [order[i], order[j]] = [order[j], order[i]];
+    reorder(order);
+  };
+  const remove = (i: number) => reorder(questions.map((_, k) => k).filter((k) => k !== i));
+
   const changeType = (i: number, type: QuestionType) => {
     const prev = questions[i];
     let options: string[];
     if (type === "text" || type === "number") options = [];
     else if (type === "rating") options = scale(1, 7);
     else options = prev.type === "rating" || prev.options.length < 2 ? ["", ""] : prev.options;
-    update(i, { type, options });
+    update(i, {
+      type,
+      options,
+      images: options.map((_, k) => (prev.images[k] && options === prev.options ? prev.images[k] : "")),
+      rows: type === "matrix" ? (prev.rows.length ? prev.rows : [""]) : [],
+      compareTo: null,
+    });
   };
+
+  // Preguntas anteriores con las que esta se puede comparar (mismo tipo y mismas opciones).
+  const comparable = (i: number) =>
+    questions
+      .map((c, k) => ({ c, k }))
+      .filter(
+        ({ c, k }) =>
+          k < i &&
+          c.type === questions[i].type &&
+          c.options.length === questions[i].options.length &&
+          c.rows.length === questions[i].rows.length,
+      );
 
   const save = () => saveQuestions(title, questions);
 
@@ -411,12 +558,24 @@ function Editor({
     });
   }
 
+  function loadGuide() {
+    const hasContent = questions.some((q) => q.text.trim());
+    if (hasContent && !window.confirm("Se reemplazarán las preguntas actuales por las de la guía. ¿Continuar?")) return;
+    setSaved(false);
+    setTitle(GUIDE_TITLE);
+    setQuestions(GUIDE_QUESTIONS.map((q) => ({ ...q })));
+  }
+
   return (
     <section className="flex flex-col gap-4">
       <label className="flex flex-col gap-1 text-sm text-[#8a5a3c]">
         Título
         <input value={title} onChange={(e) => { setSaved(false); setTitle(e.target.value); }} maxLength={100} className={`${input} text-base`} />
       </label>
+
+      <button type="button" className={`${btn2} self-start`} onClick={loadGuide}>
+        Cargar preguntas de la guía (Sello de Sostenibilidad)
+      </button>
 
       {questions.map((q, i) => (
         <div key={i} className={`flex flex-col gap-3 ${card}`}>
@@ -430,12 +589,7 @@ function Editor({
             <span className="flex-1" />
             <button type="button" className={btn2} disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
             <button type="button" className={btn2} disabled={i === questions.length - 1} onClick={() => move(i, 1)}>↓</button>
-            <button
-              type="button"
-              className={btn2}
-              disabled={questions.length === 1}
-              onClick={() => { setSaved(false); setQuestions((qs) => qs.filter((_, k) => k !== i)); }}
-            >
+            <button type="button" className={btn2} disabled={questions.length === 1} onClick={() => remove(i)}>
               Eliminar
             </button>
           </div>
@@ -475,16 +629,58 @@ function Editor({
             <p className="text-xs text-[#8a5a3c]">Los encuestados ordenarán estas opciones de la primera a la última.</p>
           )}
 
-          {(q.type === "single" || q.type === "multiple" || q.type === "ranking") && (
+          {q.type === "matrix" && (
+            <div className="flex flex-col gap-2">
+              <p className="text-xs text-[#8a5a3c]">
+                Filas (aspectos): en cada una, el encuestado elige una de las opciones de abajo.
+              </p>
+              {q.rows.map((r, ri) => (
+                <div key={ri} className="flex gap-2">
+                  <input value={r} onChange={(e) => setRow(i, ri, e.target.value)} maxLength={150} placeholder={`Aspecto ${ri + 1}`} className={`${input} flex-1`} />
+                  <button
+                    type="button"
+                    className={btn2}
+                    disabled={q.rows.length <= 1}
+                    onClick={() => update(i, { rows: q.rows.filter((_, k) => k !== ri) })}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                className={`${btn2} self-start`}
+                disabled={q.rows.length >= 15}
+                onClick={() => update(i, { rows: [...q.rows, ""] })}
+              >
+                + Aspecto
+              </button>
+              <p className="pt-1 text-xs text-[#8a5a3c]">Opciones (columnas):</p>
+            </div>
+          )}
+
+          {(q.type === "single" || q.type === "multiple" || q.type === "ranking" || q.type === "matrix") && (
             <div className="flex flex-col gap-2">
               {q.options.map((o, oi) => (
-                <div key={oi} className="flex gap-2">
-                  <input value={o} onChange={(e) => setOption(i, oi, e.target.value)} maxLength={150} placeholder={`Opción ${oi + 1}`} className={`${input} flex-1`} />
+                <div key={oi} className="flex flex-wrap gap-2">
+                  <input value={o} onChange={(e) => setOption(i, oi, e.target.value)} maxLength={150} placeholder={`Opción ${oi + 1}`} className={`${input} min-w-40 flex-1`} />
+                  <input
+                    value={q.images[oi] ?? ""}
+                    onChange={(e) => setImage(i, oi, e.target.value)}
+                    maxLength={300}
+                    placeholder="Imagen (opcional): /sellos/huella.png"
+                    className={`${input} min-w-40 flex-1 text-sm`}
+                  />
                   <button
                     type="button"
                     className={btn2}
                     disabled={q.options.length <= 2}
-                    onClick={() => update(i, { options: q.options.filter((_, k) => k !== oi) })}
+                    onClick={() =>
+                      update(i, {
+                        options: q.options.filter((_, k) => k !== oi),
+                        images: q.images.filter((_, k) => k !== oi),
+                      })
+                    }
                   >
                     ✕
                   </button>
@@ -494,11 +690,27 @@ function Editor({
                 type="button"
                 className={`${btn2} self-start`}
                 disabled={q.options.length >= 10}
-                onClick={() => update(i, { options: [...q.options, ""] })}
+                onClick={() => update(i, { options: [...q.options, ""], images: [...q.images, ""] })}
               >
                 + Opción
               </button>
             </div>
+          )}
+
+          {comparable(i).length > 0 && (
+            <label className="flex flex-wrap items-center gap-2 text-sm">
+              Comparar resultados con
+              <select
+                value={q.compareTo ?? ""}
+                onChange={(e) => update(i, { compareTo: e.target.value === "" ? null : Number(e.target.value) })}
+                className={`${input} py-1`}
+              >
+                <option value="">— ninguna —</option>
+                {comparable(i).map(({ k }) => (
+                  <option key={k} value={k}>Pregunta {k + 1}</option>
+                ))}
+              </select>
+            </label>
           )}
         </div>
       ))}
@@ -507,7 +719,7 @@ function Editor({
         type="button"
         className={`${btn2} self-start`}
         disabled={questions.length >= 50}
-        onClick={() => { setSaved(false); setQuestions((qs) => [...qs, { text: "", type: "single", options: ["", ""] }]); }}
+        onClick={() => { setSaved(false); setQuestions((qs) => [...qs, blankQuestion()]); }}
       >
         + Agregar pregunta
       </button>

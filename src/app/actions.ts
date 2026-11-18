@@ -23,9 +23,19 @@ export async function newSession(): Promise<ActionResult> {
   return { ok: true };
 }
 
-const QUESTION_TYPES: QuestionType[] = ["single", "multiple", "text", "rating", "ranking", "number"];
+const QUESTION_TYPES: QuestionType[] = ["single", "multiple", "text", "rating", "ranking", "number", "matrix"];
 
-type DraftQuestion = { text: string; type: QuestionType; options: string[] };
+type DraftQuestion = {
+  text: string;
+  type: QuestionType;
+  options: string[];
+  images: string[];
+  rows: string[];
+  compareTo: number | null;
+};
+
+// Solo rutas del propio sitio (/sellos/a.png) o https, para no incrustar contenido arbitrario.
+const validImage = (u: string) => u === "" || (u.length <= 300 && (/^\/(?!\/)/.test(u) || /^https:\/\//.test(u)));
 
 function parseQuestions(raw: unknown): DraftQuestion[] | string {
   if (!Array.isArray(raw) || raw.length < 1 || raw.length > 50) return "Agrega entre 1 y 50 preguntas";
@@ -37,10 +47,16 @@ function parseQuestions(raw: unknown): DraftQuestion[] | string {
     if (!text) return `Pregunta ${n}: escribe el enunciado`;
     if (!QUESTION_TYPES.includes(type)) return `Pregunta ${n}: tipo inválido`;
     let options: string[] = [];
-    if (type === "single" || type === "multiple" || type === "ranking") {
+    let rows: string[] = [];
+    if (type === "single" || type === "multiple" || type === "ranking" || type === "matrix") {
       options = (Array.isArray(q?.options) ? q.options : []).map((o: unknown) => String(o ?? "").trim());
       if (options.length < 2 || options.length > 10) return `Pregunta ${n}: debe tener entre 2 y 10 opciones`;
       if (options.some((o) => !o || o.length > 150)) return `Pregunta ${n}: hay opciones vacías o muy largas`;
+      if (type === "matrix") {
+        rows = (Array.isArray(q?.rows) ? q.rows : []).map((r: unknown) => String(r ?? "").trim());
+        if (rows.length < 1 || rows.length > 15) return `Pregunta ${n}: la matriz debe tener entre 1 y 15 filas`;
+        if (rows.some((r) => !r || r.length > 150)) return `Pregunta ${n}: hay filas vacías o muy largas`;
+      }
     } else if (type === "rating") {
       // Las opciones son los números consecutivos de la escala (ej. 1..7).
       const min = Number(q?.options?.[0]);
@@ -50,7 +66,28 @@ function parseQuestions(raw: unknown): DraftQuestion[] | string {
       }
       options = Array.from({ length: max - min + 1 }, (_, k) => String(min + k));
     }
-    out.push({ text, type, options });
+    const rawImages: unknown[] = Array.isArray(q?.images) ? q.images : [];
+    const images = options.map((_, k) => String(rawImages[k] ?? "").trim());
+    if (!images.every(validImage)) return `Pregunta ${n}: las imágenes deben ser una ruta que empiece con / o un enlace https`;
+
+    let compareTo: number | null = null;
+    if (q?.compareTo !== null && q?.compareTo !== undefined && q?.compareTo !== "") {
+      const c = Number(q.compareTo);
+      const target = out[c];
+      const same =
+        Number.isInteger(c) &&
+        c >= 0 &&
+        c < i &&
+        target &&
+        target.type === type &&
+        target.options.length === options.length &&
+        target.rows.length === rows.length;
+      if (!same || type === "text" || type === "number") {
+        return `Pregunta ${n}: solo se puede comparar con una pregunta anterior del mismo tipo y con las mismas opciones`;
+      }
+      compareTo = c;
+    }
+    out.push({ text, type, options, images, rows, compareTo });
   }
   return out;
 }
@@ -71,8 +108,15 @@ export async function saveQuestions(title: string, raw: unknown): Promise<Action
       { sql: "UPDATE sessions SET title = ? WHERE id = ?", args: [cleanTitle, s.id] },
       { sql: "DELETE FROM questions WHERE session_id = ?", args: [s.id] },
       ...questions.map((q, position) => ({
-        sql: "INSERT INTO questions (session_id, position, text, type, options) VALUES (?, ?, ?, ?, ?)",
-        args: [s.id, position, q.text, q.type, JSON.stringify(q.options)],
+        sql: "INSERT INTO questions (session_id, position, text, type, options, config) VALUES (?, ?, ?, ?, ?, ?)",
+        args: [
+          s.id,
+          position,
+          q.text,
+          q.type,
+          JSON.stringify(q.options),
+          JSON.stringify({ images: q.images, rows: q.rows, compareTo: q.compareTo }),
+        ],
       })),
     ],
     "write",
@@ -184,6 +228,10 @@ export async function submitAnswer(questionId: number, value: unknown): Promise<
       return { error: "Escribe un número válido" };
     }
     stored = n;
+  } else if (current.type === "matrix") {
+    const picks = Array.isArray(value) ? value.map(Number) : [];
+    if (picks.length !== current.rows.length || !picks.every(isIndex)) return { error: "Responde todas las filas" };
+    stored = picks;
   } else if (current.type === "ranking") {
     const order = Array.isArray(value) ? value.map(Number) : [];
     const valid = order.length === optionCount && new Set(order).size === optionCount && order.every(isIndex);

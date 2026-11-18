@@ -272,6 +272,7 @@ function AnswerForm({
 }) {
   const [picks, setPicks] = useState<number[]>([]);
   const [order, setOrder] = useState<number[]>(() => question.options.map((_, i) => i));
+  const [grid, setGrid] = useState<number[]>(() => question.rows.map(() => -1));
   const [text, setText] = useState("");
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
@@ -295,7 +296,7 @@ function AnswerForm({
   function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(undefined);
-    const value = type === "text" || type === "number" ? text : type === "ranking" ? order : picks;
+    const value = type === "text" || type === "number" ? text : type === "ranking" ? order : type === "matrix" ? grid : picks;
     startTransition(async () => {
       const res = await submitAnswer(question.id, value);
       if (res.error) setError(res.error);
@@ -304,7 +305,7 @@ function AnswerForm({
   }
 
   const ready =
-    type === "text" ? text.trim().length > 0 : type === "number" ? text.trim() !== "" : type === "ranking" ? true : picks.length > 0;
+    type === "text" ? text.trim().length > 0 : type === "number" ? text.trim() !== "" : type === "ranking" ? true : type === "matrix" ? grid.every((g) => g >= 0) : picks.length > 0;
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-1 flex-col gap-5">
@@ -361,6 +362,47 @@ function AnswerForm({
         </div>
       )}
 
+      {type === "matrix" && (
+        <div className="flex flex-col gap-4">
+          {question.images.some(Boolean) && (
+            <motion.div variants={itemVariants} className="flex justify-around gap-2">
+              {question.options.map((opt, c) => (
+                <div key={c} className="flex flex-1 flex-col items-center gap-1 text-center text-xs font-bold text-[#8a5a3c]">
+                  <OptionImage src={question.images[c]} large />
+                  {opt}
+                </div>
+              ))}
+            </motion.div>
+          )}
+          {question.rows.map((row, r) => (
+            <motion.div key={r} variants={itemVariants} className="flex flex-col gap-2">
+              <p className={`text-base font-bold leading-snug ${INK}`}>
+                <span className="text-[#c9a487]">{r + 1}.</span> {row}
+              </p>
+              <div className="flex gap-2">
+                {question.options.map((opt, c) => {
+                  const selected = grid[r] === c;
+                  return (
+                    <motion.button
+                      key={c}
+                      whileTap={{ scale: 0.94 }}
+                      type="button"
+                      aria-pressed={selected}
+                      onClick={() => setGrid((g) => g.map((v, k) => (k === r ? c : v)))}
+                      className={`flex-1 rounded-xl px-2 py-3 text-sm font-bold shadow-sm transition-colors duration-300 ${
+                        selected ? greenBtn : orangeBtn
+                      }`}
+                    >
+                      {opt}
+                    </motion.button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
+
       {type === "ranking" && (
         <div className="flex flex-col gap-3">
           <motion.p variants={itemVariants} className="text-sm font-semibold text-[#8a5a3c]">
@@ -388,6 +430,7 @@ function AnswerForm({
                   </motion.span>
                 </AnimatePresence>
               </span>
+              <OptionImage src={question.images[optionIndex]} />
               <span className="flex-1 whitespace-pre-wrap text-lg font-bold">{question.options[optionIndex]}</span>
               <motion.button
                 whileTap={{ scale: 0.85 }}
@@ -436,7 +479,10 @@ function AnswerForm({
                   selected ? greenBtn : orangeBtn
                 }`}
               >
-                <span className="whitespace-pre-wrap">{opt}</span>
+                <span className="flex items-center gap-3">
+                  <OptionImage src={question.images[i]} />
+                  <span className="whitespace-pre-wrap">{opt}</span>
+                </span>
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.span
                     key={selected ? "on" : "off"}
@@ -470,6 +516,12 @@ function AnswerForm({
       </motion.div>
     </form>
   );
+}
+
+function OptionImage({ src, large }: { src?: string; large?: boolean }) {
+  if (!src) return null;
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={src} alt="" className={`${large ? "h-16 w-16" : "h-12 w-12"} shrink-0 rounded-lg bg-white object-contain`} />;
 }
 
 function ErrorText({ message }: { message?: string }) {

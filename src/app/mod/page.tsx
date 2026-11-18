@@ -1,5 +1,5 @@
-import { ModeratorView } from "./ModeratorView";
+import { QuestList } from "./QuestList";
 
-export default function ModeratorPage() {
-  return <ModeratorView />;
+export default function ModeratorIndex() {
+  return <QuestList />;
 }

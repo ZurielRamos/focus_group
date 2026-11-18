@@ -1,10 +1,10 @@
 import { connection } from "next/server";
-import { buildCsv, getCurrentSession } from "@/lib/quest";
+import { buildCsv, getSessionByCode } from "@/lib/quest";
 
-export async function GET() {
+export async function GET(_req: Request, ctx: { params: Promise<{ code: string }> }) {
   await connection();
-  const session = await getCurrentSession();
-  if (!session) return new Response("Sin sesión", { status: 404 });
+  const session = await getSessionByCode((await ctx.params).code);
+  if (!session) return new Response("Quest no encontrado", { status: 404 });
   return new Response(await buildCsv(session), {
     headers: {
       "Content-Type": "text/csv; charset=utf-8",

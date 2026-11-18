@@ -52,7 +52,7 @@ export type ModState = {
 
 export type PlayState = {
   title: string;
-  status: Status | "none"; // "none": todavía no hay ninguna sesión
+  status: Status;
   index: number;
   total: number;
   me: string | null;
@@ -92,7 +92,7 @@ export async function createSession(title: string) {
         sql: "INSERT INTO sessions (code, mod_token, title) VALUES (?, ?, ?)",
         args: [code, randomBytes(18).toString("base64url"), title],
       });
-      return (await getCurrentSession())!;
+      return (await getSessionByCode(code))!;
     } catch (e) {
       if (!/UNIQUE|constraint/i.test(String(e))) throw e;
     }
@@ -100,28 +100,43 @@ export async function createSession(title: string) {
   throw new Error("No se pudo generar un código único");
 }
 
+// El código del quest viaja en la URL; se normaliza para aceptar minúsculas.
 export async function getSessionByCode(code: string) {
   await ensureSchema();
-  const res = await db.execute({ sql: "SELECT * FROM sessions WHERE code = ?", args: [code] });
+  const res = await db.execute({
+    sql: "SELECT * FROM sessions WHERE code = ?",
+    args: [String(code).trim().toUpperCase()],
+  });
   return res.rows[0] ? mapSession(res.rows[0]) : null;
 }
 
-// Los encuestados siempre entran a la sesión más reciente.
-export async function getCurrentSession() {
-  await ensureSchema();
-  const res = await db.execute("SELECT * FROM sessions ORDER BY id DESC LIMIT 1");
-  return res.rows[0] ? mapSession(res.rows[0]) : null;
-}
-
-export const emptyPlayState: PlayState = {
-  title: "",
-  status: "none",
-  index: 0,
-  total: 0,
-  me: null,
-  question: null,
-  answered: false,
+export type SessionSummary = {
+  code: string;
+  title: string;
+  status: Status;
+  questions: number;
+  participants: number;
+  createdAt: string;
 };
+
+// Todos los quests, del más reciente al más antiguo.
+export async function listSessions(): Promise<SessionSummary[]> {
+  await ensureSchema();
+  const res = await db.execute(
+    `SELECT s.code, s.title, s.status, s.created_at,
+            (SELECT COUNT(*) FROM questions q WHERE q.session_id = s.id) AS questions,
+            (SELECT COUNT(*) FROM participants p WHERE p.session_id = s.id) AS participants
+     FROM sessions s ORDER BY s.id DESC`,
+  );
+  return res.rows.map((r) => ({
+    code: String(r.code),
+    title: String(r.title),
+    status: String(r.status) as Status,
+    questions: Number(r.questions),
+    participants: Number(r.participants),
+    createdAt: String(r.created_at),
+  }));
+}
 
 export async function getQuestions(sessionId: number): Promise<Question[]> {
   const res = await db.execute({
@@ -284,11 +299,15 @@ const TYPE_NAME: Record<QuestionType, string> = {
   matrix: "Matriz",
 };
 
+// SQLite guarda UTC ("YYYY-MM-DD HH:MM:SS"); el CSV usa la hora de Colombia.
+const localTime = (v: unknown) =>
+  v ? new Date(`${String(v).replace(" ", "T")}Z`).toLocaleString("sv-SE", { timeZone: "America/Bogota" }) : "";
+
 // CSV en formato largo: una fila por participante, pregunta (y aspecto en matrices).
 export async function buildCsv(s: SessionRow): Promise<string> {
   const questions = await getQuestions(s.id);
   const ans = await db.execute({
-    sql: `SELECT a.question_id, a.value, p.nickname
+    sql: `SELECT a.question_id, a.value, a.created_at AS answered_at, q.shown_at, p.nickname
           FROM answers a
           JOIN participants p ON p.id = a.participant_id
           JOIN questions q ON q.id = a.question_id
@@ -297,19 +316,22 @@ export async function buildCsv(s: SessionRow): Promise<string> {
     args: [s.id],
   });
 
-  const lines: unknown[][] = [["Pregunta #", "Enunciado", "Tipo", "Participante", "Aspecto", "Respuesta"]];
+  const lines: unknown[][] = [
+    ["Pregunta #", "Enunciado", "Tipo", "Participante", "Aspecto", "Respuesta", "Pregunta mostrada", "Respuesta enviada"],
+  ];
   for (const [qi, q] of questions.entries()) {
     for (const a of ans.rows.filter((r) => Number(r.question_id) === q.id)) {
       const value = JSON.parse(String(a.value));
       const base = [qi + 1, q.text, TYPE_NAME[q.type], String(a.nickname)];
+      const times = [localTime(a.shown_at), localTime(a.answered_at)];
       if (q.type === "matrix") {
-        (value as number[]).forEach((o, row) => lines.push([...base, q.rows[row] ?? "", q.options[o] ?? ""]));
+        (value as number[]).forEach((o, row) => lines.push([...base.slice(0, 4), q.rows[row] ?? "", q.options[o] ?? "", ...times]));
       } else if (q.type === "ranking") {
-        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" > ")]);
+        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" > "), ...times]);
       } else if (q.type === "text" || q.type === "number") {
-        lines.push([...base, "", value]);
+        lines.push([...base, "", value, ...times]);
       } else {
-        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" | ")]);
+        lines.push([...base, "", (value as number[]).map((o) => q.options[o]).join(" | "), ...times]);
       }
     }
   }

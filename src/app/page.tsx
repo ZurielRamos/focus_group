@@ -1,5 +1,5 @@
-import { PlayerView } from "./PlayerView";
+import { JoinForm } from "./JoinForm";
 
 export default function Home() {
-  return <PlayerView />;
+  return <JoinForm />;
 }

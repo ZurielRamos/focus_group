@@ -28,19 +28,19 @@ const itemVariants: Variants = {
   show: { opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 300, damping: 26 } },
 };
 
-export function PlayerView() {
-  const { data, failed, refresh } = usePolling<PlayState>("/api/play/state");
+export function PlayerView({ code }: { code: string }) {
+  const { data, notFound, failed, refresh } = usePolling<PlayState>(`/api/play/${code}/state`);
 
   let key = "loading";
   let title: string | undefined;
   let progress: { current: number; total: number } | undefined;
   let content: ReactNode;
 
-  if (!data) {
+  if (notFound) {
+    key = "notfound";
+    content = <Message title="Quest no encontrado">Revisa el enlace o el código con el moderador.</Message>;
+  } else if (!data) {
     content = <Message>{failed ? "No se pudo cargar. Reintentando…" : "Cargando…"}</Message>;
-  } else if (data.status === "none") {
-    key = "none";
-    content = <Message title="Quest">Esperando a que el moderador cree una sesión…</Message>;
   } else if (!data.me) {
     title = data.title;
     if (data.status === "finished") {
@@ -48,7 +48,7 @@ export function PlayerView() {
       content = <Message>Esta sesión ya terminó.</Message>;
     } else {
       key = "nickname";
-      content = <NicknameForm onDone={refresh} />;
+      content = <NicknameForm code={code} onDone={refresh} />;
     }
   } else {
     title = data.title;
@@ -73,7 +73,7 @@ export function PlayerView() {
         );
       } else {
         key = `question-${data.question.id}`;
-        content = <AnswerForm question={data.question} onDone={refresh} />;
+        content = <AnswerForm code={code} question={data.question} onDone={refresh} />;
       }
     }
   }
@@ -223,7 +223,7 @@ function Message({ title, done, children }: { title?: string; done?: boolean; ch
   );
 }
 
-function NicknameForm({ onDone }: { onDone: () => void }) {
+function NicknameForm({ code, onDone }: { code: string; onDone: () => void }) {
   const [state, action, pending] = useActionState<ActionResult, FormData>(setNickname, {});
 
   useEffect(() => {
@@ -232,6 +232,7 @@ function NicknameForm({ onDone }: { onDone: () => void }) {
 
   return (
     <form action={action} noValidate className="flex flex-1 flex-col justify-center gap-4">
+      <input type="hidden" name="code" value={code} />
       <motion.h2 variants={itemVariants} className={`text-3xl font-extrabold leading-tight ${INK}`}>
         ¿Cómo quieres que te llamemos?
       </motion.h2>
@@ -264,9 +265,11 @@ function NicknameForm({ onDone }: { onDone: () => void }) {
 }
 
 function AnswerForm({
+  code,
   question,
   onDone,
 }: {
+  code: string;
   question: NonNullable<PlayState["question"]>;
   onDone: () => void;
 }) {
@@ -298,7 +301,7 @@ function AnswerForm({
     setError(undefined);
     const value = type === "text" || type === "number" ? text : type === "ranking" ? order : type === "matrix" ? grid : picks;
     startTransition(async () => {
-      const res = await submitAnswer(question.id, value);
+      const res = await submitAnswer(code, question.id, value);
       if (res.error) setError(res.error);
       else onDone();
     });

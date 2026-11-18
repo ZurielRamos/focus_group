@@ -51,11 +51,16 @@ export function ensureSchema() {
       `,
     )
     .then(async () => {
-      // Migración: columna de configuración (imágenes, filas de matriz, comparación).
-      try {
-        await db.execute("ALTER TABLE questions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'");
-      } catch (e) {
-        if (!/duplicate column/i.test(String(e))) throw e;
+      // Migraciones: config (imágenes, filas de matriz, comparación) y shown_at (cuándo se mostró la pregunta).
+      for (const sql of [
+        "ALTER TABLE questions ADD COLUMN config TEXT NOT NULL DEFAULT '{}'",
+        "ALTER TABLE questions ADD COLUMN shown_at TEXT",
+      ]) {
+        try {
+          await db.execute(sql);
+        } catch (e) {
+          if (!/duplicate column/i.test(String(e))) throw e;
+        }
       }
     })
     .catch((e) => {

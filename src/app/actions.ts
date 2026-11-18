@@ -8,7 +8,7 @@ import {
   getParticipantByToken,
   getQuestions,
   createSession,
-  getCurrentSession,
+  getSessionByCode,
   type QuestionType,
 } from "@/lib/quest";
 
@@ -18,8 +18,30 @@ const newToken = () => randomBytes(18).toString("base64url");
 
 // ---------- Moderador (sin autenticación: uso único) ----------
 
-export async function newSession(): Promise<ActionResult> {
-  await createSession("Quest");
+export async function newSession(): Promise<ActionResult & { code?: string }> {
+  const s = await createSession("Quest");
+  return { ok: true, code: s.code };
+}
+
+// Solo se pueden eliminar quests en borrador; borra también sus participantes y respuestas.
+export async function deleteSession(code: string): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
+  if (!s) return { error: "Quest no encontrado" };
+  if (s.status !== "draft") return { error: "Solo se pueden eliminar quests en borrador" };
+
+  const draft = "EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status = 'draft')";
+  await db.batch(
+    [
+      {
+        sql: `DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE session_id = ?) AND ${draft}`,
+        args: [s.id, s.id],
+      },
+      { sql: `DELETE FROM participants WHERE session_id = ? AND ${draft}`, args: [s.id, s.id] },
+      { sql: `DELETE FROM questions WHERE session_id = ? AND ${draft}`, args: [s.id, s.id] },
+      { sql: "DELETE FROM sessions WHERE id = ? AND status = 'draft'", args: [s.id] },
+    ],
+    "write",
+  );
   return { ok: true };
 }
 
@@ -92,8 +114,8 @@ function parseQuestions(raw: unknown): DraftQuestion[] | string {
   return out;
 }
 
-export async function saveQuestions(title: string, raw: unknown): Promise<ActionResult> {
-  const s = await getCurrentSession();
+export async function saveQuestions(code: string, title: string, raw: unknown): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (s.status !== "draft") return { error: "La sesión ya inició y no se puede editar" };
 
@@ -124,22 +146,28 @@ export async function saveQuestions(title: string, raw: unknown): Promise<Action
   return { ok: true };
 }
 
-export async function startSession(): Promise<ActionResult> {
-  const s = await getCurrentSession();
+export async function startSession(code: string): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if ((await getQuestions(s.id)).length === 0) return { error: "Guarda al menos una pregunta" };
 
-  await db.execute({
+  const res = await db.execute({
     sql: "UPDATE sessions SET status = 'live', current_index = 0 WHERE id = ? AND status IN ('draft', 'ready')",
     args: [s.id],
   });
+  if (res.rowsAffected > 0) {
+    await db.execute({
+      sql: "UPDATE questions SET shown_at = CASE WHEN position = 0 THEN CURRENT_TIMESTAMP END WHERE session_id = ?",
+      args: [s.id],
+    });
+  }
   return { ok: true };
 }
 
 // Borra las respuestas y vuelve al inicio, conservando preguntas y participantes.
 // "ready": solo reiniciar (queda lista para iniciar). "draft": reiniciar y abrir el editor.
-export async function resetSession(mode: "ready" | "draft"): Promise<ActionResult> {
-  const s = await getCurrentSession();
+export async function resetSession(code: string, mode: "ready" | "draft"): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (mode !== "ready" && mode !== "draft") return { error: "Modo inválido" };
   if (mode === "ready" && (await getQuestions(s.id)).length === 0) return { error: "No hay preguntas que reiniciar" };
@@ -150,6 +178,7 @@ export async function resetSession(mode: "ready" | "draft"): Promise<ActionResul
         sql: "DELETE FROM answers WHERE question_id IN (SELECT id FROM questions WHERE session_id = ?)",
         args: [s.id],
       },
+      { sql: "UPDATE questions SET shown_at = NULL WHERE session_id = ?", args: [s.id] },
       { sql: "UPDATE sessions SET status = ?, current_index = 0 WHERE id = ?", args: [mode, s.id] },
     ],
     "write",
@@ -158,8 +187,8 @@ export async function resetSession(mode: "ready" | "draft"): Promise<ActionResul
 }
 
 // `fromIndex` evita avanzar dos veces si el moderador hace doble clic.
-export async function nextQuestion(fromIndex: number): Promise<ActionResult> {
-  const s = await getCurrentSession();
+export async function nextQuestion(code: string, fromIndex: number): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (s.status !== "live") return { error: "La sesión no está en curso" };
 
@@ -168,17 +197,24 @@ export async function nextQuestion(fromIndex: number): Promise<ActionResult> {
     fromIndex + 1 < total
       ? "UPDATE sessions SET current_index = current_index + 1 WHERE id = ? AND status = 'live' AND current_index = ?"
       : "UPDATE sessions SET status = 'finished' WHERE id = ? AND status = 'live' AND current_index = ?";
-  await db.execute({ sql, args: [s.id, Number(fromIndex)] });
+  const res = await db.execute({ sql, args: [s.id, Number(fromIndex)] });
+  if (res.rowsAffected > 0 && fromIndex + 1 < total) {
+    await db.execute({
+      sql: "UPDATE questions SET shown_at = CURRENT_TIMESTAMP WHERE session_id = ? AND position = ?",
+      args: [s.id, Number(fromIndex) + 1],
+    });
+  }
   return { ok: true };
 }
 
 // ---------- Encuestado ----------
 
 export async function setNickname(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  const code = String(formData.get("code") ?? "");
   const nickname = String(formData.get("nickname") ?? "").trim().replace(/\s+/g, " ");
   if (nickname.length < 2 || nickname.length > 20) return { error: "El nickname debe tener entre 2 y 20 caracteres" };
 
-  const s = await getCurrentSession();
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Todavía no hay una sesión activa" };
   if (s.status === "finished") return { error: "Esta sesión ya terminó" };
 
@@ -202,8 +238,8 @@ export async function setNickname(_prev: ActionResult, formData: FormData): Prom
   return { ok: true };
 }
 
-export async function submitAnswer(questionId: number, value: unknown): Promise<ActionResult> {
-  const s = await getCurrentSession();
+export async function submitAnswer(code: string, questionId: number, value: unknown): Promise<ActionResult> {
+  const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
 
   const token = (await cookies()).get(cookieName(s.code))?.value;

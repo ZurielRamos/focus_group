@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState, useTransition, type ReactNode } from "react";
-import { newSession, nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
+import { useState, useTransition, type ReactNode } from "react";
+import Link from "next/link";
+import { nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
 import type { ModState, Question, QuestionResult, QuestionType } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { GUIDE_QUESTIONS, GUIDE_TITLE, type Draft } from "@/lib/guide";
 
 const card = "rounded-2xl border-2 border-[#f3c9a3] bg-white/70 p-5";
@@ -29,11 +31,20 @@ function beforeOf(data: ModState, i: number) {
 
 const WARN_ANSWERS = "Se borrarán todas las respuestas y la sesión volverá al inicio. ¿Continuar?";
 
-export function ModeratorView() {
-  const { data, failed, refresh } = usePolling<ModState>("/api/mod/state");
+export function ModeratorView({ code }: { code: string }) {
+  const { data, notFound, failed, refresh } = usePolling<ModState>(`/api/mod/${code}/state`);
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
   const [confirm, setConfirm] = useState<{ message: string; label: string; onConfirm: () => void } | null>(null);
+
+  if (notFound) {
+    return (
+      <Page>
+        <p className="font-bold">Este quest no existe.</p>
+        <Link href="/mod" className={`${btn2} self-start`}>← Todos los quests</Link>
+      </Page>
+    );
+  }
 
   if (!data) {
     return (
@@ -43,8 +54,8 @@ export function ModeratorView() {
     );
   }
 
-  const joinUrl = window.location.origin;
-  const modUrl = `${window.location.origin}/mod`;
+  const joinUrl = `${window.location.origin}/q/${code}`;
+  const modUrl = `${window.location.origin}/mod/${code}`;
   const isLast = data.index + 1 >= data.questions.length;
   const hasProgress = data.status === "live" || data.results.some((r) => r.answered > 0);
 
@@ -61,6 +72,10 @@ export function ModeratorView() {
 
   return (
     <Page>
+      <Link href="/mod" className="self-start text-sm font-bold text-[#8a5a3c] hover:underline">
+        ← Todos los quests
+      </Link>
+
       <header className={`flex flex-col gap-2 ${card}`}>
         <h1 className="text-3xl font-extrabold">{data.title}</h1>
         <CopyField label="Enlace para encuestados" url={joinUrl} hint="Compártelo con los participantes." />
@@ -79,14 +94,14 @@ export function ModeratorView() {
 
       {data.status !== "draft" && (
         <div className="flex flex-wrap gap-2">
-          <a href="/api/mod/export" download className={`${btn2} inline-block`}>
+          <a href={`/api/mod/${code}/export`} download className={`${btn2} inline-block`}>
             Descargar CSV
           </a>
           <button
             disabled={pending}
             className={btn2}
             onClick={() => {
-              const go = () => run(() => resetSession("draft"));
+              const go = () => run(() => resetSession(code, "draft"));
               if (hasProgress) ask(WARN_ANSWERS, "Editar sesión", go);
               else go();
             }}
@@ -98,21 +113,12 @@ export function ModeratorView() {
               disabled={pending}
               className={btn2}
               onClick={() => {
-                ask(WARN_ANSWERS, "Reiniciar sesión", () => run(() => resetSession("ready")));
+                ask(WARN_ANSWERS, "Reiniciar sesión", () => run(() => resetSession(code, "ready")));
               }}
             >
               Reiniciar sesión
             </button>
           )}
-          <button
-            disabled={pending}
-            className={btn2}
-            onClick={() => {
-              ask("Se descartará esta sesión, sus participantes y respuestas. ¿Crear una nueva?", "Crear nueva", () => run(newSession));
-            }}
-          >
-            Nueva sesión
-          </button>
         </div>
       )}
 
@@ -126,7 +132,7 @@ export function ModeratorView() {
               <li key={q.id} className="whitespace-pre-wrap">{q.text}</li>
             ))}
           </ol>
-          <button disabled={pending} className={`${btn} self-start`} onClick={() => run(startSession)}>
+          <button disabled={pending} className={`${btn} self-start`} onClick={() => run(() => startSession(code))}>
             Iniciar sesión
           </button>
         </section>
@@ -134,12 +140,13 @@ export function ModeratorView() {
 
       {data.status === "draft" && (
         <Editor
+          code={code}
           initialTitle={data.title}
           initial={data.questions}
           onStart={(save) =>
             run(async () => {
               const saved = await save();
-              return saved.error ? saved : startSession();
+              return saved.error ? saved : startSession(code);
             })
           }
           onError={setError}
@@ -169,7 +176,7 @@ export function ModeratorView() {
           />
           <button
             disabled={pending}
-            onClick={() => run(() => nextQuestion(data.index))}
+            onClick={() => run(() => nextQuestion(code, data.index))}
             className={`${btn} self-start`}
           >
             {isLast ? "Finalizar sesión" : "Siguiente pregunta"}
@@ -181,7 +188,7 @@ export function ModeratorView() {
         <section className="flex flex-col gap-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-2xl font-extrabold">Sesión finalizada · Resultados</h2>
-            <a href="/api/mod/export" download className={`${btn2} inline-block`}>
+            <a href={`/api/mod/${code}/export`} download className={`${btn2} inline-block`}>
               Descargar CSV (Excel)
             </a>
           </div>
@@ -210,50 +217,6 @@ export function ModeratorView() {
         />
       )}
     </Page>
-  );
-}
-
-function ConfirmDialog({
-  message,
-  label,
-  onCancel,
-  onConfirm,
-}: {
-  message: string;
-  label: string;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#5a2210]/40 p-6" onClick={onCancel}>
-      <div
-        role="alertdialog"
-        aria-modal="true"
-        aria-labelledby="confirm-message"
-        onClick={(e) => e.stopPropagation()}
-        className="flex w-full max-w-sm flex-col gap-5 rounded-2xl border-2 border-[#f3c9a3] bg-[#fdf5ea] p-6 text-[#5a2210] shadow-xl"
-      >
-        <p id="confirm-message" className="text-lg font-extrabold leading-snug">
-          {message}
-        </p>
-        <div className="flex justify-end gap-3">
-          <button type="button" autoFocus className={btn2} onClick={onCancel}>
-            Cancelar
-          </button>
-          <button type="button" className={`${btn} py-2 text-sm`} onClick={onConfirm}>
-            {label}
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -467,12 +430,14 @@ const scale = (min: number, max: number) => Array.from({ length: max - min + 1 }
 const blankQuestion = (): Draft => ({ text: "", type: "single", options: ["", ""], images: ["", ""], rows: [], compareTo: null });
 
 function Editor({
+  code,
   initialTitle,
   initial,
   onStart,
   onError,
   busy,
 }: {
+  code: string;
   initialTitle: string;
   initial: Question[];
   onStart: (save: () => Promise<{ error?: string }>) => void;
@@ -487,6 +452,7 @@ function Editor({
   );
   const [saved, setSaved] = useState(false);
   const [saving, startSaving] = useTransition();
+  const [confirmGuide, setConfirmGuide] = useState(false);
 
   const update = (i: number, patch: Partial<Draft>) => {
     setSaved(false);
@@ -547,7 +513,7 @@ function Editor({
           c.rows.length === questions[i].rows.length,
       );
 
-  const save = () => saveQuestions(title, questions);
+  const save = () => saveQuestions(code, title, questions);
 
   function onSave() {
     onError(undefined);
@@ -559,8 +525,7 @@ function Editor({
   }
 
   function loadGuide() {
-    const hasContent = questions.some((q) => q.text.trim());
-    if (hasContent && !window.confirm("Se reemplazarán las preguntas actuales por las de la guía. ¿Continuar?")) return;
+    setConfirmGuide(false);
     setSaved(false);
     setTitle(GUIDE_TITLE);
     setQuestions(GUIDE_QUESTIONS.map((q) => ({ ...q })));
@@ -573,7 +538,11 @@ function Editor({
         <input value={title} onChange={(e) => { setSaved(false); setTitle(e.target.value); }} maxLength={100} className={`${input} text-base`} />
       </label>
 
-      <button type="button" className={`${btn2} self-start`} onClick={loadGuide}>
+      <button
+        type="button"
+        className={`${btn2} self-start`}
+        onClick={() => (questions.some((q) => q.text.trim()) ? setConfirmGuide(true) : loadGuide())}
+      >
         Cargar preguntas de la guía (Sello de Sostenibilidad)
       </button>
 
@@ -734,6 +703,14 @@ function Editor({
           Iniciar sesión
         </button>
       </div>
+      {confirmGuide && (
+        <ConfirmDialog
+          message="Se reemplazarán las preguntas actuales por las de la guía. ¿Continuar?"
+          label="Cargar guía"
+          onCancel={() => setConfirmGuide(false)}
+          onConfirm={loadGuide}
+        />
+      )}
     </section>
   );
 }

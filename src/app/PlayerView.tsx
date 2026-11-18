@@ -231,7 +231,7 @@ function NicknameForm({ onDone }: { onDone: () => void }) {
   }, [state, onDone]);
 
   return (
-    <form action={action} className="flex flex-1 flex-col justify-center gap-4">
+    <form action={action} noValidate className="flex flex-1 flex-col justify-center gap-4">
       <motion.h2 variants={itemVariants} className={`text-3xl font-extrabold leading-tight ${INK}`}>
         ¿Cómo quieres que te llamemos?
       </motion.h2>
@@ -244,8 +244,6 @@ function NicknameForm({ onDone }: { onDone: () => void }) {
         transition={spring}
         id="nickname"
         name="nickname"
-        required
-        minLength={2}
         maxLength={20}
         autoFocus
         autoComplete="off"
@@ -309,7 +307,7 @@ function AnswerForm({
     type === "text" ? text.trim().length > 0 : type === "number" ? text.trim() !== "" : type === "ranking" ? true : picks.length > 0;
 
   return (
-    <form onSubmit={submit} className="flex flex-1 flex-col gap-5">
+    <form onSubmit={submit} noValidate className="flex flex-1 flex-col gap-5">
       <motion.h2 variants={itemVariants} className={`whitespace-pre-wrap text-2xl font-extrabold leading-snug ${INK}`}>
         {question.text}
       </motion.h2>

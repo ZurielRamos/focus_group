@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, type ReactNode } from "react";
+import { useEffect, useState, useTransition, type ReactNode } from "react";
 import { newSession, nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
 import type { ModState, Question, QuestionResult, QuestionType } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
@@ -26,6 +26,7 @@ export function ModeratorView() {
   const { data, failed, refresh } = usePolling<ModState>("/api/mod/state");
   const [error, setError] = useState<string>();
   const [pending, startTransition] = useTransition();
+  const [confirm, setConfirm] = useState<{ message: string; label: string; onConfirm: () => void } | null>(null);
 
   if (!data) {
     return (
@@ -39,6 +40,8 @@ export function ModeratorView() {
   const modUrl = `${window.location.origin}/mod`;
   const isLast = data.index + 1 >= data.questions.length;
   const hasProgress = data.status === "live" || data.results.some((r) => r.answered > 0);
+
+  const ask = (message: string, label: string, onConfirm: () => void) => setConfirm({ message, label, onConfirm });
 
   function run(fn: () => Promise<{ error?: string }>) {
     setError(undefined);
@@ -73,8 +76,9 @@ export function ModeratorView() {
             disabled={pending}
             className={btn2}
             onClick={() => {
-              if (hasProgress && !window.confirm(WARN_ANSWERS)) return;
-              run(() => resetSession("draft"));
+              const go = () => run(() => resetSession("draft"));
+              if (hasProgress) ask(WARN_ANSWERS, "Editar sesión", go);
+              else go();
             }}
           >
             Editar sesión
@@ -84,8 +88,7 @@ export function ModeratorView() {
               disabled={pending}
               className={btn2}
               onClick={() => {
-                if (!window.confirm(WARN_ANSWERS)) return;
-                run(() => resetSession("ready"));
+                ask(WARN_ANSWERS, "Reiniciar sesión", () => run(() => resetSession("ready")));
               }}
             >
               Reiniciar sesión
@@ -95,8 +98,7 @@ export function ModeratorView() {
             disabled={pending}
             className={btn2}
             onClick={() => {
-              if (!window.confirm("Se descartará esta sesión, sus participantes y respuestas. ¿Crear una nueva?")) return;
-              run(newSession);
+              ask("Se descartará esta sesión, sus participantes y respuestas. ¿Crear una nueva?", "Crear nueva", () => run(newSession));
             }}
           >
             Nueva sesión
@@ -172,7 +174,64 @@ export function ModeratorView() {
           ))}
         </section>
       )}
+
+      {confirm && (
+        <ConfirmDialog
+          message={confirm.message}
+          label={confirm.label}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => {
+            const action = confirm.onConfirm;
+            setConfirm(null);
+            action();
+          }}
+        />
+      )}
     </Page>
+  );
+}
+
+function ConfirmDialog({
+  message,
+  label,
+  onCancel,
+  onConfirm,
+}: {
+  message: string;
+  label: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#5a2210]/40 p-6" onClick={onCancel}>
+      <div
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="confirm-message"
+        onClick={(e) => e.stopPropagation()}
+        className="flex w-full max-w-sm flex-col gap-5 rounded-2xl border-2 border-[#f3c9a3] bg-[#fdf5ea] p-6 text-[#5a2210] shadow-xl"
+      >
+        <p id="confirm-message" className="text-lg font-extrabold leading-snug">
+          {message}
+        </p>
+        <div className="flex justify-end gap-3">
+          <button type="button" autoFocus className={btn2} onClick={onCancel}>
+            Cancelar
+          </button>
+          <button type="button" className={`${btn} py-2 text-sm`} onClick={onConfirm}>
+            {label}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

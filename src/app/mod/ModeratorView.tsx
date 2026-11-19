@@ -2,6 +2,7 @@
 
 import { useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
+import { AnimatePresence, motion } from "framer-motion";
 import { nextQuestion, resetSession, saveQuestions, startSession } from "../actions";
 import type { ModState, Question, QuestionResult, QuestionType } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
@@ -173,6 +174,7 @@ export function ModeratorView({ code }: { code: string }) {
             result={data.results[data.index]}
             participants={data.participants.length}
             before={beforeOf(data, data.index)}
+            everyone={data.participants}
           />
           <button
             disabled={pending}
@@ -199,6 +201,7 @@ export function ModeratorView({ code }: { code: string }) {
               result={data.results[i]}
               participants={data.participants.length}
               before={beforeOf(data, i)}
+              everyone={data.participants}
             />
           ))}
         </section>
@@ -265,17 +268,43 @@ function Delta({ now, prev }: { now: number; prev: number }) {
   );
 }
 
+// Nombres que van apareciendo conforme la gente responde.
+function Names({ names, className = "" }: { names: string[]; className?: string }) {
+  return (
+    <span className={`flex flex-wrap gap-1 ${className}`}>
+      <AnimatePresence initial={false}>
+        {names.map((n) => (
+          <motion.span
+            key={n}
+            layout
+            initial={{ opacity: 0, scale: 0.6 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.6 }}
+            transition={{ type: "spring", stiffness: 400, damping: 26 }}
+            className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-[#5a2210] shadow-sm"
+          >
+            {n}
+          </motion.span>
+        ))}
+      </AnimatePresence>
+    </span>
+  );
+}
+
 function QuestionBlock({
   q,
   result,
   participants,
   before,
+  everyone,
 }: {
   q: Question;
   result: QuestionResult;
   participants: number;
   before?: Before;
+  everyone: string[];
 }) {
+  const waiting = everyone.filter((n) => !result.answeredBy.includes(n));
   const max = Math.max(1, ...result.counts);
   const fmt = (n: number | null) => (n === null ? "–" : Number.isInteger(n) ? String(n) : n.toFixed(2));
 
@@ -285,6 +314,11 @@ function QuestionBlock({
       <p className="text-sm text-[#8a5a3c]">
         {TYPE_LABEL[q.type]} · Respondieron {result.answered} de {participants}
       </p>
+      {waiting.length > 0 && waiting.length < everyone.length && (
+        <p className="text-xs text-[#8a5a3c]">
+          Faltan: <strong>{waiting.join(", ")}</strong>
+        </p>
+      )}
       {before && (
         <p className="text-xs font-semibold text-[#8a5a3c]">
           Comparada con la pregunta {q.compareTo! + 1} ({before.result.answered} respuestas).
@@ -345,6 +379,7 @@ function QuestionBlock({
                           className={`bg-[#faead7] p-2 text-center last:rounded-r-xl ${win ? "font-extrabold text-[#2e9e6e]" : ""}`}
                         >
                           <div className="text-lg leading-none">{n}</div>
+                          <Names names={result.matrixVoters[r][c]} className="mt-1 justify-center" />
                           {prev !== undefined && <Delta now={n} prev={prev} />}
                         </td>
                       );
@@ -379,6 +414,15 @@ function QuestionBlock({
                 </li>
               ))}
           </ol>
+          {result.orders.length > 0 && (
+            <ul className="flex flex-col gap-1 text-xs">
+              {result.orders.map((o) => (
+                <li key={o.nickname} className="rounded-lg bg-[#faead7] px-3 py-2">
+                  <strong>{o.nickname}:</strong> {o.order.join(" > ")}
+                </li>
+              ))}
+            </ul>
+          )}
         </>
       )}
 
@@ -405,6 +449,7 @@ function QuestionBlock({
                   <div className="h-2.5 rounded-full bg-[#f6dcc0]">
                     <div className="h-2.5 rounded-full bg-[#2e9e6e] transition-all duration-500" style={{ width: `${(result.counts[i] / max) * 100}%` }} />
                   </div>
+                  <Names names={result.voters[i]} className="pt-1" />
                 </div>
               </li>
             ))}

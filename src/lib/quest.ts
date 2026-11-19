@@ -38,6 +38,10 @@ export type QuestionResult = {
   max: number | null; // solo número
   ranks: number[]; // posición promedio por opción (ranking); 1 = primera
   matrix: number[][]; // matrix: votos por fila y por opción
+  voters: string[][]; // quién eligió cada opción (selección, escala y ranking: la primera)
+  matrixVoters: string[][][]; // matrix: quién eligió cada celda [fila][opción]
+  orders: { nickname: string; order: string[] }[]; // ranking: el orden que dio cada persona
+  answeredBy: string[]; // quienes ya respondieron
 };
 
 export type ModState = {
@@ -193,6 +197,9 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
     const texts: QuestionResult["texts"] = [];
     const numbers: number[] = [];
     const matrix = q.rows.map(() => q.options.map(() => 0));
+    const voters: string[][] = q.options.map(() => []);
+    const matrixVoters: string[][][] = q.rows.map(() => q.options.map(() => []));
+    const orders: QuestionResult["orders"] = [];
 
     for (const a of mine) {
       const value = JSON.parse(String(a.value));
@@ -203,14 +210,23 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
         texts.push({ nickname: String(a.nickname), text: String(value) });
       } else if (q.type === "matrix") {
         (value as number[]).forEach((optionIndex, row) => {
-          if (matrix[row]?.[optionIndex] !== undefined) matrix[row][optionIndex]++;
+          if (matrix[row]?.[optionIndex] !== undefined) {
+            matrix[row][optionIndex]++;
+            matrixVoters[row][optionIndex].push(String(a.nickname));
+          }
         });
       } else if (q.type === "ranking") {
+        orders.push({ nickname: String(a.nickname), order: (value as number[]).map((o) => q.options[o] ?? "") });
         (value as number[]).forEach((optionIndex, position) => {
           if (rankSums[optionIndex] !== undefined) rankSums[optionIndex] += position + 1;
         });
       } else {
-        for (const i of value as number[]) if (counts[i] !== undefined) counts[i]++;
+        for (const i of value as number[]) {
+          if (counts[i] !== undefined) {
+            counts[i]++;
+            voters[i].push(String(a.nickname));
+          }
+        }
       }
     }
 
@@ -232,6 +248,10 @@ export async function buildModState(s: SessionRow): Promise<ModState> {
       max: numbers.length ? Math.max(...numbers) : null,
       ranks: rankSums.map((sum) => (mine.length ? sum / mine.length : 0)),
       matrix,
+      voters,
+      matrixVoters,
+      orders,
+      answeredBy: mine.map((a) => String(a.nickname)),
     };
   });
 

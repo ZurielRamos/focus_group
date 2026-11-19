@@ -1,4 +1,4 @@
-// Acceso del moderador: una contraseña compartida (MOD_PASSWORD) y una cookie firmada con HMAC.
+// Acceso del moderador: una contraseña compartida y una cookie firmada con HMAC.
 // Usa Web Crypto para funcionar tanto en el proxy como en acciones y rutas del servidor.
 export const MOD_COOKIE = "mod_auth";
 export const MOD_SESSION_SECONDS = 60 * 60 * 12;
@@ -18,11 +18,12 @@ function same(a: string, b: string) {
   return diff === 0;
 }
 
-const password = () => process.env.MOD_PASSWORD || "";
+// Contraseña fija del panel. MOD_PASSWORD, si existe, la reemplaza.
+const DEFAULT_PASSWORD = "Strategee26..";
+const password = () => process.env.MOD_PASSWORD || DEFAULT_PASSWORD;
 
 export async function checkPassword(input: string) {
   const expected = password();
-  if (!expected) return false; // sin contraseña configurada, nadie entra
   // Se comparan firmas del mismo largo para no filtrar el tamaño de la clave.
   return same(await sign(input, "pw"), await sign(expected, "pw"));
 }
@@ -33,7 +34,7 @@ export async function makeToken() {
 }
 
 export async function verifyToken(token: string | undefined) {
-  if (!token || !password()) return false;
+  if (!token) return false;
   const [exp, sig] = token.split(".");
   if (!exp || !sig || !(Number(exp) > Date.now() / 1000)) return false;
   return same(sig, await sign(exp, password()));

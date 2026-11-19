@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { deleteSession, logout, newSession } from "../actions";
+import { deleteSession, duplicateSession, logout, newSession } from "../actions";
 import type { SessionSummary, Status } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
 
@@ -34,11 +34,23 @@ export function QuestList() {
 
   const [toDelete, setToDelete] = useState<{ code: string; title: string } | null>(null);
 
-  function remove(code: string) {
+  const [toCopy, setToCopy] = useState<{ code: string; title: string } | null>(null);
+
+  function copy(code: string, title: string) {
+    setToCopy(null);
+    setError(undefined);
+    startTransition(async () => {
+      const res = await duplicateSession(code, title);
+      if (res.error || !res.code) setError(res.error ?? "No se pudo duplicar el quest");
+      else router.push(`/mod/${res.code}`);
+    });
+  }
+
+  function remove(code: string, typed: string) {
     setToDelete(null);
     setError(undefined);
     startTransition(async () => {
-      const res = await deleteSession(code);
+      const res = await deleteSession(code, typed);
       if (res.error) setError(res.error);
       refresh();
     });
@@ -82,6 +94,15 @@ export function QuestList() {
                   </div>
                   <span className="rounded-full bg-[#faead7] px-3 py-1 text-sm font-bold">{STATUS_LABEL[s.status]}</span>
                 </Link>
+                <button
+                  type="button"
+                  disabled={pending}
+                  aria-label={`Duplicar ${s.title}`}
+                  onClick={() => setToCopy({ code: s.code, title: `${s.title} (copia)`.slice(0, 100) })}
+                  className="rounded-2xl border-2 border-[#f3c9a3] bg-white px-4 text-sm font-bold text-[#5a2210] transition hover:border-[#ee8b43] disabled:opacity-40"
+                >
+                  Duplicar
+                </button>
                 {s.status === "draft" && (
                   <button
                     type="button"
@@ -103,8 +124,19 @@ export function QuestList() {
         <ConfirmDialog
           message={`¿Eliminar el quest «${toDelete.title}» (${toDelete.code})? Esta acción no se puede deshacer.`}
           label="Eliminar"
+          requireText={toDelete.title}
           onCancel={() => setToDelete(null)}
-          onConfirm={() => remove(toDelete.code)}
+          onConfirm={(typed) => remove(toDelete.code, typed)}
+        />
+      )}
+
+      {toCopy && (
+        <ConfirmDialog
+          message="Duplicar quest"
+          label="Duplicar"
+          askText={{ label: "Nombre del nuevo quest (se copian las preguntas, sin respuestas)", initial: toCopy.title }}
+          onCancel={() => setToCopy(null)}
+          onConfirm={(name) => copy(toCopy.code, name)}
         />
       )}
     </div>

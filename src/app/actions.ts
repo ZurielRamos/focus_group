@@ -52,11 +52,12 @@ export async function newSession(): Promise<ActionResult & { code?: string }> {
 }
 
 // Solo se pueden eliminar quests en borrador; borra también sus participantes y respuestas.
-export async function deleteSession(code: string): Promise<ActionResult> {
+export async function deleteSession(code: string, confirmTitle: string): Promise<ActionResult> {
   if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Quest no encontrado" };
   if (s.status !== "draft") return { error: "Solo se pueden eliminar quests en borrador" };
+  if (String(confirmTitle ?? "").trim() !== s.title.trim()) return { error: "El nombre no coincide con el del quest" };
 
   const draft = "EXISTS (SELECT 1 FROM sessions WHERE id = ? AND status = 'draft')";
   await db.batch(
@@ -72,6 +73,23 @@ export async function deleteSession(code: string): Promise<ActionResult> {
     "write",
   );
   return { ok: true };
+}
+
+// Copia título, preguntas y configuración en un quest nuevo en borrador (sin participantes ni respuestas).
+export async function duplicateSession(code: string, title: string): Promise<ActionResult & { code?: string }> {
+  if (!(await isModerator())) return DENIED;
+  const source = await getSessionByCode(code);
+  if (!source) return { error: "Quest no encontrado" };
+  const cleanTitle = String(title ?? "").trim();
+  if (!cleanTitle || cleanTitle.length > 100) return { error: "El nombre es obligatorio (máx. 100 caracteres)" };
+
+  const copy = await createSession(cleanTitle);
+  await db.execute({
+    sql: `INSERT INTO questions (session_id, position, text, type, options, config)
+          SELECT ?, position, text, type, options, config FROM questions WHERE session_id = ? ORDER BY position`,
+    args: [copy.id, source.id],
+  });
+  return { ok: true, code: copy.code };
 }
 
 const QUESTION_TYPES: QuestionType[] = ["single", "multiple", "text", "rating", "ranking", "number", "matrix"];

@@ -2,6 +2,9 @@
 
 import { randomBytes } from "node:crypto";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import { MOD_COOKIE, MOD_SESSION_SECONDS, checkPassword, makeToken } from "@/lib/auth";
+import { isModerator } from "@/lib/requireMod";
 import { db } from "@/lib/db";
 import {
   cookieName,
@@ -16,15 +19,41 @@ export type ActionResult = { error?: string; ok?: boolean };
 
 const newToken = () => randomBytes(18).toString("base64url");
 
-// ---------- Moderador (sin autenticación: uso único) ----------
+// ---------- Moderador (protegido con contraseña) ----------
+
+const DENIED = { error: "No autorizado. Vuelve a iniciar sesión." };
+
+export async function login(_prev: ActionResult, formData: FormData): Promise<ActionResult> {
+  const ok = await checkPassword(String(formData.get("password") ?? ""));
+  if (!ok) {
+    await new Promise((r) => setTimeout(r, 800)); // frena la fuerza bruta
+    return { error: "Contraseña incorrecta" };
+  }
+  (await cookies()).set(MOD_COOKIE, await makeToken(), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: MOD_SESSION_SECONDS,
+  });
+  const next = String(formData.get("next") ?? "");
+  redirect(/^\/mod(\/|$|\?)/.test(next) && !next.startsWith("//") ? next : "/mod");
+}
+
+export async function logout() {
+  (await cookies()).delete(MOD_COOKIE);
+  redirect("/mod/login");
+}
 
 export async function newSession(): Promise<ActionResult & { code?: string }> {
+  if (!(await isModerator())) return DENIED;
   const s = await createSession("Quest");
   return { ok: true, code: s.code };
 }
 
 // Solo se pueden eliminar quests en borrador; borra también sus participantes y respuestas.
 export async function deleteSession(code: string): Promise<ActionResult> {
+  if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Quest no encontrado" };
   if (s.status !== "draft") return { error: "Solo se pueden eliminar quests en borrador" };
@@ -115,6 +144,7 @@ function parseQuestions(raw: unknown): DraftQuestion[] | string {
 }
 
 export async function saveQuestions(code: string, title: string, raw: unknown): Promise<ActionResult> {
+  if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (s.status !== "draft") return { error: "La sesión ya inició y no se puede editar" };
@@ -147,6 +177,7 @@ export async function saveQuestions(code: string, title: string, raw: unknown): 
 }
 
 export async function startSession(code: string): Promise<ActionResult> {
+  if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if ((await getQuestions(s.id)).length === 0) return { error: "Guarda al menos una pregunta" };
@@ -167,6 +198,7 @@ export async function startSession(code: string): Promise<ActionResult> {
 // Borra las respuestas y vuelve al inicio, conservando preguntas y participantes.
 // "ready": solo reiniciar (queda lista para iniciar). "draft": reiniciar y abrir el editor.
 export async function resetSession(code: string, mode: "ready" | "draft"): Promise<ActionResult> {
+  if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (mode !== "ready" && mode !== "draft") return { error: "Modo inválido" };
@@ -188,6 +220,7 @@ export async function resetSession(code: string, mode: "ready" | "draft"): Promi
 
 // `fromIndex` evita avanzar dos veces si el moderador hace doble clic.
 export async function nextQuestion(code: string, fromIndex: number): Promise<ActionResult> {
+  if (!(await isModerator())) return DENIED;
   const s = await getSessionByCode(code);
   if (!s) return { error: "Sesión no encontrada" };
   if (s.status !== "live") return { error: "La sesión no está en curso" };

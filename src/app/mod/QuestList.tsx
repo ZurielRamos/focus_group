@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { deleteSession, newSession } from "../actions";
+import { deleteSession, logout, newSession } from "../actions";
 import type { SessionSummary, Status } from "@/lib/quest";
 import { usePolling } from "@/lib/usePolling";
 
@@ -49,9 +49,14 @@ export function QuestList() {
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-10">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-3xl font-extrabold">Mis quests</h1>
-          <button disabled={pending} onClick={create} className={btn}>
-            {pending ? "Creando…" : "+ Nuevo quest"}
-          </button>
+          <div className="flex items-center gap-3">
+            <form action={logout}>
+              <button className="text-sm font-bold text-[#8a5a3c] hover:underline">Cerrar sesión</button>
+            </form>
+            <button disabled={pending} onClick={create} className={btn}>
+              {pending ? "Creando…" : "+ Nuevo quest"}
+            </button>
+          </div>
         </header>
 
         {error && <p className="text-sm font-semibold text-red-700">{error}</p>}
